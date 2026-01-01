@@ -17,7 +17,8 @@ import type {
   RiskIdentificationOutput,
   RiskItem,
   TokenUsage,
-  WorkflowContext
+  WorkflowContext,
+  ScoredRiskItem
 } from "./aiTypes";
 import { buildWorkflowContext, mergeScoring, validateActionsOutput, validateRiskIdentification } from "./workflow";
 
@@ -468,6 +469,7 @@ function parseRiskIdentification(raw: unknown, expectedMode: "five_factors" | "p
     if (dimensionType !== expectedMode) {
       throw new Error(`风险项#${index + 1} 的 dimension_type 不匹配`);
     }
+    const resolvedDimensionType = expectedMode;
     if (typeof entry.dimension !== "string" || !entry.dimension.trim()) {
       throw new Error(`风险项#${index + 1} dimension 非法`);
     }
@@ -496,7 +498,7 @@ function parseRiskIdentification(raw: unknown, expectedMode: "five_factors" | "p
     }
     items.push({
       risk_id: typeof entry.risk_id === "string" ? entry.risk_id : RISK_ID_PLACEHOLDER,
-      dimension_type: dimensionType,
+      dimension_type: resolvedDimensionType,
       dimension,
       dimension_id: entry.dimension_id as string | null,
       failure_mode: entry.failure_mode as string,
@@ -759,7 +761,8 @@ async function runWorkflow(
       }),
       scope: context.scope,
       background: context.background,
-      objectiveBias: context.objectiveBias
+      objectiveBias: context.objectiveBias,
+      evidenceBlocks: context.evidenceBlocks
     });
     const actionResponse = handlers?.onLlmDelta
       ? await callJsonLlmStream<ActionOutput>(env, actionPrompt, "action_generation", handlers, signal)

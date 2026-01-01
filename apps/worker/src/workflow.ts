@@ -326,12 +326,18 @@ function formatEvidenceBlocks(chunks: EvidenceChunk[]): string {
   if (chunks.length === 0) {
     return "（无可用片段）";
   }
-  return chunks
-    .map((chunk, index) => {
-      const label = chunk.source === "sop" ? "SOP" : "文献";
-      return `[${label}#${index + 1}] ${chunk.content}`;
-    })
-    .join("\n\n");
+  const sopChunks = chunks.filter((chunk) => chunk.source === "sop");
+  const literatureChunks = chunks.filter((chunk) => chunk.source === "literature");
+  const buildSection = (title: string, items: EvidenceChunk[]) => {
+    if (items.length === 0) {
+      return `${title}：无`;
+    }
+    return [
+      `${title}：`,
+      ...items.map((chunk, index) => `[${title.replace("片段", "")}#${index + 1}] ${chunk.content}`)
+    ].join("\n\n");
+  };
+  return [buildSection("SOP片段", sopChunks), buildSection("文献片段", literatureChunks)].join("\n\n");
 }
 
 export function validateRiskIdentification(

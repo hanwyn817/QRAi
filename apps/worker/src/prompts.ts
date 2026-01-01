@@ -26,6 +26,11 @@ export const DEFAULT_TEMPLATE = `# 风险评估报告
 export const SYSTEM_QRM = `你是药品生产领域质量风险管理（QRM）专家，熟悉 ICH Q9、GMP 与常见监管缺陷逻辑。
 你必须严格依据用户提供的评估范围、背景信息，以及（若提供）SOP/文献片段开展推理，不得编造“已提供的内部制度细节”。
 
+SOP/文献使用规则：
+1) SOP 代表企业既有管理手段与控制措施，不得虚构未提供的内部制度细节。
+2) 文献片段代表外部监管/行业建议，可用于识别风险与提出改进措施。
+3) 在风险评价中，SOP 可用于下调 P（可能性）与 D（可测性），但不应改变 S（严重性）。
+
 强约束输出规则：
 1) 你输出必须是【有效JSON】，不得包含任何额外文本、解释、Markdown、代码块标记。
 2) 你必须严格遵守用户提示中给定的字段、枚举和值域，不得新增字段、不得遗漏字段。
@@ -62,6 +67,7 @@ export function buildRiskIdentificationFiveFactorsPrompt(input: {
 
 覆盖性要求：
 - 每个dimension至少给出1条（除非范围明显不涉及；此时仍建议输出该维度下“边界条件风险/不适用说明”，并在consequence中写明“不涉及的理由/边界条件”）
+- 风险识别应包含依据文献片段中的要求/控制建议反推风险点；SOP 仅用于确认既有控制，不作为新增风险来源。
 
 上下文（用户输入）：
 [范围] ${input.scope}
@@ -100,6 +106,7 @@ export function buildRiskIdentificationProcessFlowPrompt(input: {
 覆盖性要求（目标导向）：
 - 你应优先覆盖关键步骤（对质量/患者/DI/合规影响大的步骤），并尽量覆盖全部步骤。
 - 若某步骤确实与评估范围无关，你可以不为该步骤输出风险条目，但整体必须满足系统最小条目数要求（由系统校验）。
+- 风险识别应包含依据文献片段中的要求/控制建议反推风险点；SOP 仅用于确认既有控制，不作为新增风险来源。
 
 上下文（用户输入）：
 [范围] ${input.scope}
@@ -135,6 +142,8 @@ export function buildFmeaScoringPrompt(input: {
 - 不要计算RPN，不要输出风险等级
 - 理由必须基于：风险描述 + 用户上下文（范围/背景/目标倾向）+（若提供）SOP/文献片段的支持性信息
   - 注意：你不需要、也不得输出 evidence 或 chunk_id 等结构化引用
+- SOP 用于体现既有控制措施对 P 与 D 的影响：若 SOP 明确规定监测/复核/控制手段，可下调 P 或 D。
+- 文献片段作为外部要求/建议：若文献提出控制但 SOP 未覆盖，不得因 SOP 下调 P/D；S 由后果严重性决定，不因 SOP 变化。
 
 风险清单（结构化JSON；包含dimension_type/dimension等上下文）：
 ${input.riskItemsJson}
@@ -154,6 +163,7 @@ export function buildActionsPrompt(input: {
   scope: string;
   background: string;
   objectiveBias: string;
+  evidenceBlocks: string;
 }): string {
   return `任务：仅针对中、高风险（系统在输入中标注 need_actions=true 的项）提出改进/追加控制措施。
 
@@ -166,6 +176,8 @@ export function buildActionsPrompt(input: {
   - owner_dept: 责任部门（例如：质量保证部、质量控制部、生产部、工程部、信息部等）
   - planned_date: 计划完成日期（YYYY-MM-DD）
 - 措施必须与该风险的 failure_mode 强关联，避免泛泛而谈
+- 文献片段用于提出改进措施的依据与方向，优先采用文献中的建议/要求。
+- 若 SOP 已覆盖相关控制，仅在存在执行/有效性风险时提出“强化执行/补充记录/复核/培训”等措施，避免重复已有制度。
 - 若输入中某 risk_id 的 need_actions=false，你不得为其输出 actions
 
 输入（带评分、RPN、是否需要措施标记；scored_items_json由系统生成，你只负责补全actions）：
@@ -175,6 +187,9 @@ ${input.scoredItemsJson}
 [范围] ${input.scope}
 [背景] ${input.background}
 [评估目标倾向] ${input.objectiveBias}
+
+可用SOP/文献片段摘要（用于提出措施，不需要在输出中引用）：
+${input.evidenceBlocks}
 `;
 }
 
