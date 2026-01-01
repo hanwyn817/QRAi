@@ -6,6 +6,11 @@ import { generateReport, generateReportStream } from "./ai";
 import { renderDocx } from "./exporters";
 
 const app = new Hono<{ Bindings: Env; Variables: { user: User | null } }>();
+const ALLOWED_EVAL_TOOLS = new Set(["FMEA"]);
+
+const normalizeEvalTool = (value: string | null | undefined) => {
+  return value && ALLOWED_EVAL_TOOLS.has(value) ? value : "FMEA";
+};
 
 app.use("*", async (c, next) => {
   const originHeader = c.req.header("Origin");
@@ -330,6 +335,10 @@ app.patch("/api/projects/:id/inputs", requireAuth, async (c) => {
   const evalTool = typeof body?.evalTool === "string" ? body.evalTool.trim() : null;
   const templateId = typeof body?.templateId === "string" ? body.templateId.trim() : null;
 
+  if (evalTool && !ALLOWED_EVAL_TOOLS.has(evalTool)) {
+    return c.json({ error: "评估工具暂未开放" }, 400);
+  }
+
   await c.env.DB.prepare(
     `UPDATE project_inputs SET scope = COALESCE(?, scope), background = COALESCE(?, background), objective = COALESCE(?, objective), risk_method = COALESCE(?, risk_method), eval_tool = COALESCE(?, eval_tool), template_id = COALESCE(?, template_id), updated_at = ? WHERE project_id = ?`
   )
@@ -494,7 +503,7 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
       background: (inputs?.background as string) ?? null,
       objective: (inputs?.objective as string) ?? null,
       riskMethod: (inputs?.risk_method as string) ?? null,
-      evalTool: (inputs?.eval_tool as string) ?? null,
+      evalTool: normalizeEvalTool((inputs?.eval_tool as string) ?? null),
       templateContent: templateContent ?? null,
       sopTexts,
       literatureTexts,
@@ -645,7 +654,7 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
               background: (inputs?.background as string) ?? null,
               objective: (inputs?.objective as string) ?? null,
               riskMethod: (inputs?.risk_method as string) ?? null,
-              evalTool: (inputs?.eval_tool as string) ?? null,
+              evalTool: normalizeEvalTool((inputs?.eval_tool as string) ?? null),
               templateContent: templateContent ?? null,
               sopTexts,
               literatureTexts,

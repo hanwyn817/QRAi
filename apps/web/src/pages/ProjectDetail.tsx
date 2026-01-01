@@ -5,7 +5,16 @@ import { extractTextFromFile } from "../lib/fileText";
 import { renderMarkdown } from "../lib/markdown";
 
 const RISK_METHODS = ["五因素法"];
-const EVAL_TOOLS = ["FMEA", "FMECA", "HAZOP"];
+const EVAL_TOOLS = [
+  { value: "FMEA", label: "FMEA", disabled: false },
+  { value: "FMECA", label: "FMECA（暂未开放）", disabled: true },
+  { value: "HAZOP", label: "HAZOP（暂未开放）", disabled: true }
+];
+const ALLOWED_EVAL_TOOLS = new Set(["FMEA"]);
+
+const normalizeEvalTool = (value: string | null | undefined) => {
+  return value && ALLOWED_EVAL_TOOLS.has(value) ? value : "FMEA";
+};
 const WORKFLOW_STEPS = [
   { id: "context", label: "准备上下文" },
   { id: "risk_identification", label: "风险识别" },
@@ -419,7 +428,7 @@ export default function ProjectDetail() {
       background: result.data.inputs?.background ?? "",
       objective: result.data.inputs?.objective ?? "",
       riskMethod: result.data.inputs?.risk_method ?? "五因素法",
-      evalTool: result.data.inputs?.eval_tool ?? "FMEA",
+      evalTool: normalizeEvalTool(result.data.inputs?.eval_tool),
       templateId: result.data.inputs?.template_id ?? ""
     });
   };
@@ -1165,8 +1174,8 @@ export default function ProjectDetail() {
                   onChange={(e) => setInputs((prev) => ({ ...prev, evalTool: e.target.value }))}
                 >
                   {EVAL_TOOLS.map((tool) => (
-                    <option key={tool} value={tool}>
-                      {tool}
+                    <option key={tool.value} value={tool.value} disabled={tool.disabled}>
+                      {tool.label}
                     </option>
                   ))}
                 </select>
