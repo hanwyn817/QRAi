@@ -1,0 +1,29 @@
+name = "qrai-worker"
+main = "src/index.ts"
+compatibility_date = "2024-07-30"
+
+[vars]
+APP_ENV = "dev"
+APP_ORIGIN = "http://localhost:5173"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+OPENAI_MODEL = "gpt-4o-mini"
+REPORT_TIMEZONE = "Asia/Shanghai"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "qrai"
+database_id = "REPLACE_WITH_D1_ID"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "qrai-files"
+
+# Optional: external render service for PDF/DOCX exports
+# [vars]
+# EXPORT_RENDER_URL = "https://your-render-service"
+# EXPORT_RENDER_API_KEY = ""
+# EXPORT_RENDER_MODE = "markdown" # or html
+
+# Optional: bootstrap admin
+# [vars]
+# ADMIN_BOOTSTRAP_KEY = ""

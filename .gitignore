@@ -1,0 +1,11 @@
+node_modules
+.DS_Store
+.env
+.env.*
+apps/worker/.dev.vars
+apps/web/.env
+apps/worker/dist
+apps/web/dist
+.wrangler
+wrangler.lock
+*.log

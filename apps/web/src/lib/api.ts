@@ -1,0 +1,172 @@
+export type ApiResponse<T> = { data: T | null; error: string | null };
+
+const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+
+async function request<T>(path: string, options?: RequestInit): Promise<ApiResponse<T>> {
+  const headers: HeadersInit = options?.headers ?? {};
+  if (!(options?.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    ...options,
+    headers
+  });
+
+  const text = await response.text();
+  let payload: unknown = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = null;
+    }
+  }
+
+  if (!response.ok) {
+    return { data: null, error: payload?.error ?? "请求失败" };
+  }
+
+  return { data: payload as T, error: null };
+}
+
+export const api = {
+  async register(email: string, password: string, adminKey?: string) {
+    return request<{ id: string; email: string; role: string }>("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ email, password, adminKey })
+    });
+  },
+  async login(email: string, password: string) {
+    return request<{ id: string; email: string; role: string }>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password })
+    });
+  },
+  async logout() {
+    return request<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
+  },
+  async getMe() {
+    return request<{ user: { id: string; email: string; role: "admin" | "user" } }>("/api/me");
+  },
+  async listTemplates() {
+    return request<{
+      templates: Array<{
+        id: string;
+        name: string;
+        description: string | null;
+        created_at?: string;
+        updated_at?: string;
+      }>;
+    }>(
+      "/api/templates"
+    );
+  },
+  async getTemplate(id: string) {
+    return request<{ id: string; name: string; description: string | null; content: string }>(
+      `/api/templates/${id}`
+    );
+  },
+  async uploadTemplate(form: FormData) {
+    return request<{ id: string; name: string; description: string | null }>("/api/admin/templates", {
+      method: "POST",
+      body: form
+    });
+  },
+  async deleteTemplate(id: string) {
+    return request<{ ok: boolean }>(`/api/admin/templates/${id}`, { method: "DELETE" });
+  },
+  async listProjects() {
+    return request<{
+      projects: Array<{
+        id: string;
+        title: string;
+        status: string;
+        created_at: string;
+        updated_at?: string;
+        report_count?: number;
+        latest_completed_at?: string | null;
+      }>;
+    }>(
+      "/api/projects"
+    );
+  },
+  async createProject(title: string) {
+    return request<{ id: string; title: string; status: string }>("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ title })
+    });
+  },
+  async deleteProject(id: string) {
+    return request<{ ok: boolean }>(`/api/projects/${id}`, { method: "DELETE" });
+  },
+  async getProject(id: string) {
+    return request<{
+      project: { id: string; title: string; status: string };
+      inputs: {
+        scope: string | null;
+        background: string | null;
+        objective: string | null;
+        risk_method: string | null;
+        eval_tool: string | null;
+        template_id: string | null;
+      };
+      files: Array<{ id: string; type: string; filename: string; status: string; created_at: string }>;
+      reports: Array<{
+        id: string;
+        version: number;
+        status: string;
+        created_at: string;
+        prompt_tokens: number | null;
+        completion_tokens: number | null;
+        total_tokens: number | null;
+      }>;
+    }>(`/api/projects/${id}`);
+  },
+  async updateProjectInputs(id: string, data: {
+    scope?: string;
+    background?: string;
+    objective?: string;
+    riskMethod?: string;
+    evalTool?: string;
+    templateId?: string;
+  }) {
+    return request<{ ok: boolean }>(`/api/projects/${id}/inputs`, {
+      method: "PATCH",
+      body: JSON.stringify(data)
+    });
+  },
+  async uploadProjectFile(id: string, form: FormData) {
+    return request<{ id: string; filename: string; status: string }>(`/api/projects/${id}/files`, {
+      method: "POST",
+      body: form
+    });
+  },
+  async deleteProjectFile(projectId: string, fileId: string) {
+    return request<{ ok: boolean }>(`/api/projects/${projectId}/files/${fileId}`, {
+      method: "DELETE"
+    });
+  },
+  async createReport(id: string, templateContent: string) {
+    return request<{ id: string; version: number; status: string }>(`/api/projects/${id}/reports`, {
+      method: "POST",
+      body: JSON.stringify({ templateContent })
+    });
+  },
+  async getReport(id: string, includeContent = false) {
+    return request<{ report: Record<string, unknown>; content: string | null; data: unknown }>(
+      `/api/reports/${id}?includeContent=${includeContent ? 1 : 0}`
+    );
+  },
+  async exportReport(id: string, format: "pdf" | "docx") {
+    return request<{ id: string; status: string }>(`/api/reports/${id}/exports`, {
+      method: "POST",
+      body: JSON.stringify({ format })
+    });
+  },
+  async deleteReport(id: string, force = false) {
+    const query = force ? "?force=1" : "";
+    return request<{ ok: boolean }>(`/api/reports/${id}${query}`, { method: "DELETE" });
+  }
+};
