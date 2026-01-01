@@ -2,9 +2,8 @@ import { Hono } from "hono";
 import { authMiddleware, clearSession, clearSessionCookie, createSession, hashPassword, requireAdmin, requireAuth, setSessionCookie, verifyPassword } from "./auth";
 import type { Env, User } from "./types";
 import { nowIso, putR2Json, putR2Text, readR2Text, safeJsonParse } from "./utils";
-import { generateReport, generateReportMarkdown, generateReportStream } from "./ai";
+import { generateReport, generateReportStream } from "./ai";
 import { renderExternal } from "./exporters";
-import { formatSearchResults, getSearchProvider } from "./search";
 
 const app = new Hono<{ Bindings: Env; Variables: { user: User | null } }>();
 
@@ -432,15 +431,20 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
     .first();
 
   const files = await c.env.DB.prepare(
-    "SELECT type, text_key FROM project_files WHERE project_id = ?"
+    "SELECT type, text_key, filename FROM project_files WHERE project_id = ?"
   )
     .bind(projectId)
     .all();
 
   const sopTexts: string[] = [];
   const literatureTexts: string[] = [];
+  const sourceFiles: Array<{ type: string; filename: string }> = [];
   for (const row of files.results ?? []) {
     const textKey = row.text_key as string | null;
+    const filename = row.filename as string | null;
+    if (filename) {
+      sourceFiles.push({ type: row.type as string, filename });
+    }
     if (!textKey) {
       continue;
     }
@@ -484,10 +488,6 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
     .run();
 
   try {
-    const searchProvider = getSearchProvider(c.env);
-    const queryParts = [project.title, inputs?.scope, inputs?.objective].filter(Boolean);
-    const searchResults = await searchProvider.search(queryParts.join(" "));
-
     const report = await generateReport(c.env, {
       title: project.title as string,
       scope: (inputs?.scope as string) ?? null,
@@ -498,7 +498,7 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
       templateContent: templateContent ?? null,
       sopTexts,
       literatureTexts,
-      searchResults: formatSearchResults(searchResults)
+      sourceFiles
     });
 
     const reportKey = `projects/${projectId}/reports/${reportId}.md`;
@@ -568,15 +568,20 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
   }
 
   const files = await c.env.DB.prepare(
-    "SELECT type, text_key FROM project_files WHERE project_id = ?"
+    "SELECT type, text_key, filename FROM project_files WHERE project_id = ?"
   )
     .bind(projectId)
     .all();
 
   const sopTexts: string[] = [];
   const literatureTexts: string[] = [];
+  const sourceFiles: Array<{ type: string; filename: string }> = [];
   for (const row of files.results ?? []) {
     const textKey = row.text_key as string | null;
+    const filename = row.filename as string | null;
+    if (filename) {
+      sourceFiles.push({ type: row.type as string, filename });
+    }
     if (!textKey) {
       continue;
     }
@@ -632,10 +637,6 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
 
       (async () => {
         try {
-          const searchProvider = getSearchProvider(c.env);
-          const queryParts = [project.title, inputs?.scope, inputs?.objective].filter(Boolean);
-          const searchResults = await searchProvider.search(queryParts.join(" "));
-
           let report = await generateReportStream(
             c.env,
             {
@@ -648,13 +649,21 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
               templateContent: templateContent ?? null,
               sopTexts,
               literatureTexts,
-              searchResults: formatSearchResults(searchResults)
+              sourceFiles
             },
-            (delta) => {
-              send("delta", { delta });
-            },
-            (usage) => {
-              send("usage", usage);
+            {
+              onDelta: (delta) => {
+                send("delta", { delta });
+              },
+              onUsage: (usage) => {
+                send("usage", usage);
+              },
+              onStep: (step, status) => {
+                send("step", { step, status });
+              },
+              onLlmDelta: (step, delta) => {
+                send("llm", { step, delta });
+              }
             },
             { signal: abortController.signal }
           );
@@ -662,26 +671,6 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
           if (aborted || abortController.signal.aborted) {
             await markAborted();
             return;
-          }
-
-          if (!report.markdown.trim()) {
-            const fallback = await generateReportMarkdown(c.env, {
-              title: project.title as string,
-              scope: (inputs?.scope as string) ?? null,
-              background: (inputs?.background as string) ?? null,
-              objective: (inputs?.objective as string) ?? null,
-              riskMethod: (inputs?.risk_method as string) ?? null,
-              evalTool: (inputs?.eval_tool as string) ?? null,
-              templateContent: templateContent ?? null,
-              sopTexts,
-              literatureTexts,
-              searchResults: formatSearchResults(searchResults)
-            });
-            report = fallback;
-            send("delta", { delta: report.markdown });
-            if (report.usage) {
-              send("usage", report.usage);
-            }
           }
 
           if (aborted || abortController.signal.aborted) {

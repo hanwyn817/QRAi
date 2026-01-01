@@ -22,5 +22,8 @@
     "@vitejs/plugin-react": "^4.3.1",
     "typescript": "^5.5.4",
     "vite": "^5.4.0"
+  },
+  "optionalDependencies": {
+    "@esbuild/darwin-arm64": "^0.21.5"
   }
 }

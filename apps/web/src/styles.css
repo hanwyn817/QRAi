@@ -655,6 +655,25 @@ button.danger {
   cursor: pointer;
 }
 
+.report-item.highlight {
+  border-color: rgba(192, 86, 33, 0.55);
+  background: linear-gradient(120deg, rgba(255, 237, 213, 0.8), #fff 55%);
+  box-shadow: 0 0 0 3px rgba(192, 86, 33, 0.15);
+  animation: reportGlow 1.6s ease-in-out 0.2s 2;
+}
+
+@keyframes reportGlow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(192, 86, 33, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(192, 86, 33, 0.2);
+  }
+  100% {
+    box-shadow: 0 0 0 3px rgba(192, 86, 33, 0.15);
+  }
+}
+
 .report-item.active {
   border-color: var(--secondary);
   box-shadow: 0 0 0 2px rgba(192, 86, 33, 0.2);
@@ -729,6 +748,101 @@ button.danger {
   margin-bottom: 1.2rem;
 }
 
+.workflow-grid {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.55fr) 2.45fr;
+  gap: 1rem;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.workflow-steps {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.9rem;
+  border-radius: 14px;
+  border: 1px dashed var(--border);
+  background: #fff7ed;
+}
+
+.workflow-step {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.4rem 0.3rem;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.workflow-step.pending {
+  opacity: 0.7;
+}
+
+.workflow-step.running {
+  background: #fff1e6;
+}
+
+.workflow-step.done {
+  background: #edf8f4;
+}
+
+.workflow-step.error {
+  background: #fff1f0;
+}
+
+.workflow-step.selected {
+  outline: 2px solid rgba(192, 86, 33, 0.35);
+  background: #fff3e6;
+}
+
+.workflow-step .step-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #cfc2b6;
+  margin-top: 0.35rem;
+  flex-shrink: 0;
+}
+
+.workflow-step.running .step-dot {
+  background: var(--secondary);
+  box-shadow: 0 0 0 4px rgba(192, 86, 33, 0.15);
+}
+
+.workflow-step.done .step-dot {
+  background: var(--accent-dark);
+  box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+}
+
+.workflow-step.error .step-dot {
+  background: #b42318;
+  box-shadow: 0 0 0 4px rgba(180, 35, 24, 0.12);
+}
+
+.step-info {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.workflow-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.workflow-table th,
+.workflow-table td {
+  border: 1px solid var(--border);
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.workflow-table tr.partial td {
+  color: var(--muted);
+  font-style: italic;
+}
+
 .stream-header {
   display: flex;
   justify-content: space-between;
@@ -749,8 +863,11 @@ button.danger {
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 1rem;
-  max-height: 260px;
-  overflow: auto;
+  height: 100%;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
 }
 
 .stream-hint {
@@ -838,6 +955,10 @@ button.danger {
   }
 
   .config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-grid {
     grid-template-columns: 1fr;
   }
 }

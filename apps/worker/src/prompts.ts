@@ -1,7 +1,3 @@
-import type { ReportInput } from "./ai";
-
-type PromptMode = "json" | "markdown";
-
 export const DEFAULT_TEMPLATE = `# 风险评估报告
 
 ## 1. 概述
@@ -16,7 +12,7 @@ export const DEFAULT_TEMPLATE = `# 风险评估报告
 
 ### 4.2 评估方法
 
-### 4.3 风险评价（FMEA 表）
+### 4.3 风险评价（评估表）
 
 ## 5. 风险控制措施
 
@@ -27,104 +23,205 @@ export const DEFAULT_TEMPLATE = `# 风险评估报告
 ## 8. 参考文件
 `;
 
-export function buildPrompt(
-  input: ReportInput,
-  mode: PromptMode = "json"
-): { system: string; user: string } {
-  const template = input.templateContent?.trim() || DEFAULT_TEMPLATE;
-  const sopText = input.sopTexts.length > 0 ? input.sopTexts.join("\n\n---\n\n") : "（未提供）";
-  const literatureText = input.literatureTexts.length > 0 ? input.literatureTexts.join("\n\n---\n\n") : "（未提供）";
-  const searchText = input.searchResults?.length ? input.searchResults.join("\n") : "（未联网检索或无结果）";
+export const SYSTEM_QRM = `你是药品生产领域质量风险管理（QRM）专家，熟悉 ICH Q9、GMP 与常见监管缺陷逻辑。
+你必须严格依据用户提供的评估范围、背景信息，以及（若提供）SOP/文献片段开展推理，不得编造“已提供的内部制度细节”。
 
-  const system = `你是药品生产企业质量管理风险评估专家，擅长为 GMP 合规场景输出专业的风险评估报告。输出必须为中文，风格接近企业 QA 报告，结构化清晰。`;
+强约束输出规则：
+1) 你输出必须是【有效JSON】，不得包含任何额外文本、解释、Markdown、代码块标记。
+2) 你必须严格遵守用户提示中给定的字段、枚举和值域，不得新增字段、不得遗漏字段。
+3) 若某风险点无法从提供的SOP/文献片段直接支撑，你仍可提出“通用监管常见风险”，但必须在 failure_mode 或 consequence 中明确标注“基于通用GMP/监管常见缺陷推导”。
+4) 评分与计算边界：你不得计算RPN或风险等级；只输出S/P/D及理由。RPN与等级由系统代码计算。`;
 
-  const outputRequirement =
-    mode === "json"
-      ? `【输出 JSON 格式】
-{
-  "report_markdown": "...",
-  "risk_items": [
-    { "risk_id": "R1", "dimension": "人员", "failure_mode": "...", "consequence": "..." }
-  ],
-  "fmea_entries": [
-    {
-      "risk_id": "R1",
-      "dimension": "人员",
-      "failure_mode": "...",
-      "consequence": "...",
-      "s": 9,
-      "s_reason": "...",
-      "p": 6,
-      "p_reason": "...",
-      "d": 3,
-      "d_reason": "...",
-      "rpn": 162,
-      "level": "高",
-      "conclusion": "不可接受",
-      "controls": "..."
-    }
-  ]
+export const SYSTEM_QRM_MARKDOWN = `你是药品生产领域质量风险管理（QRM）专家，熟悉 ICH Q9、GMP 与常见监管缺陷逻辑。
+你必须严格依据用户提供的评估范围、背景信息，以及（若提供）SOP/文献片段开展推理，不得编造“已提供的内部制度细节”。
+
+输出规则：
+1) 输出必须是完整 Markdown 报告，不得输出 JSON、解释或其他文本。
+2) 报告必须包含并严格按顺序输出：概述、目的、范围、风险评估（含4.1/4.2/4.3）、风险控制措施、风险评估结论、再评估、参考文件。
+3) 表格中的风险点使用“序号”对齐，不展示 risk_id。`;
+
+export function buildRiskIdentificationFiveFactorsPrompt(input: {
+  scope: string;
+  background: string;
+  objectiveBias: string;
+  templateRequirements: string;
+  evidenceBlocks: string;
+}): string {
+  return `任务：基于给定上下文，使用五因素法（人员/设备与设施/物料/法规/程序/环境）输出“风险识别清单”。
+
+输出要求（严格）：
+- 输出JSON对象：{"items":[...]}。
+- items中每个item必须包含字段：
+  - risk_id: UUID占位符字符串（固定写"00000000-0000-0000-0000-000000000000"，系统会替换为真实UUID）
+  - dimension_type: 固定为 "five_factors"
+  - dimension: 必须为以下枚举之一：人员 / 设备与设施 / 物料 / 法规/程序 / 环境
+  - dimension_id: 固定为 null
+  - failure_mode: 风险点/失效模式（必须具体、可审计、可用于后续逐条FMEA评分）
+  - consequence: 潜在后果（需体现对产品质量/患者安全/数据完整性/合规性中相关项的影响；避免泛泛而谈）
+- 不得输出任何其他字段（例如 evidence 等）
+
+覆盖性要求：
+- 每个dimension至少给出1条（除非范围明显不涉及；此时仍建议输出该维度下“边界条件风险/不适用说明”，并在consequence中写明“不涉及的理由/边界条件”）
+
+上下文（用户输入）：
+[范围] ${input.scope}
+[背景] ${input.background}
+[评估目标倾向] ${input.objectiveBias}
+[模板要求摘要] ${input.templateRequirements}
+
+SOP/文献片段（向量库召回，已按相关性排序；用于辅助推理，不需要在输出中引用）：
+${input.evidenceBlocks}
+`;
 }
 
-仅输出 JSON，不要额外解释。`
-      : `【输出格式】
-请直接输出完整 Markdown 报告内容，不要 JSON，不要额外解释。`;
+export function buildRiskIdentificationProcessFlowPrompt(input: {
+  scope: string;
+  background: string;
+  objectiveBias: string;
+  templateRequirements: string;
+  processStepsJson: string;
+  evidenceBlocks: string;
+}): string {
+  return `任务：基于给定上下文，使用流程图法（按流程阶段/步骤逐个分析）输出“风险识别清单”。
 
-  const user = `请基于以下信息生成风险评估报告：
+你将获得一份“流程步骤清单”，你必须在该清单的范围内进行风险识别，不得发明不存在的步骤。
 
-【项目标题】
-${input.title}
+输出要求（严格）：
+- 输出JSON对象：{"items":[...]}。
+- items中每个item必须包含字段：
+  - risk_id: UUID占位符字符串（固定写"00000000-0000-0000-0000-000000000000"，系统会替换为真实UUID）
+  - dimension_type: 固定为 "process_flow"
+  - dimension: 必须严格等于某个流程步骤的 step_name（见下方流程步骤清单）
+  - dimension_id: 必须严格等于该步骤的 step_id（UUID字符串）
+  - failure_mode: 该步骤下的风险点/失效模式（必须具体、可审计、可用于后续逐条FMEA评分）
+  - consequence: 潜在后果（需体现对产品质量/患者安全/数据完整性/合规性中相关项的影响，并说明为何与该步骤相关）
+- 不得输出任何其他字段（例如 evidence 等）
 
-【评估范围】
-${input.scope || "（未填写）"}
+覆盖性要求（目标导向）：
+- 你应优先覆盖关键步骤（对质量/患者/DI/合规影响大的步骤），并尽量覆盖全部步骤。
+- 若某步骤确实与评估范围无关，你可以不为该步骤输出风险条目，但整体必须满足系统最小条目数要求（由系统校验）。
 
-【背景信息】
-${input.background || "（未填写）"}
+上下文（用户输入）：
+[范围] ${input.scope}
+[背景] ${input.background}
+[评估目标倾向] ${input.objectiveBias}
+[模板要求摘要] ${input.templateRequirements}
 
-【评估目标】
-${input.objective || "（未填写）"}
+流程步骤清单（仅允许使用这些 step_id/step_name；不得自创）：
+${input.processStepsJson}
 
-【风险识别方法】
-${input.riskMethod || "（未填写）"}
+SOP/文献片段（向量库召回；用于辅助推理，不需要在输出中引用）：
+${input.evidenceBlocks}
+`;
+}
 
-【评估工具】
-${input.evalTool || "（未填写）"}
+export function buildFmeaScoringPrompt(input: {
+  riskItemsJson: string;
+  evidenceBlocks: string;
+  scope: string;
+  background: string;
+  objectiveBias: string;
+}): string {
+  return `任务：对给定风险清单逐条进行FMEA评分（S/P/D），并给出理由。
 
-【模板（用户可编辑，无占位符）】
-${template}
+评分规则（严格）：
+- 维度：严重性S、可能性P、可测性D（越难发现分值越高）
+- 分值只能从：9 / 6 / 3 / 1 中选择（高/中/低/极低）
+- 输出JSON对象：{"rows":[...]}，每行字段必须包含：
+  - risk_id
+  - s, s_reason
+  - p, p_reason
+  - d, d_reason
+- 不要计算RPN，不要输出风险等级
+- 理由必须基于：风险描述 + 用户上下文（范围/背景/目标倾向）+（若提供）SOP/文献片段的支持性信息
+  - 注意：你不需要、也不得输出 evidence 或 chunk_id 等结构化引用
 
-【SOP 文件内容（视为已有控制措施与管理规定）】
-${sopText}
+风险清单（结构化JSON；包含dimension_type/dimension等上下文）：
+${input.riskItemsJson}
 
-【文献资料内容（用于识别风险点与控制措施）】
-${literatureText}
+上下文（用户输入）：
+[范围] ${input.scope}
+[背景] ${input.background}
+[评估目标倾向] ${input.objectiveBias}
 
-【联网检索结果（若有）】
-${searchText}
+可用SOP/文献片段摘要（用于辅助评分理由，不需要在输出中引用）：
+${input.evidenceBlocks}
+`;
+}
 
-【硬性要求】
-1. 必须按以下章节顺序完整输出：
-   1) 概述
-   2) 目的
-   3) 范围
-   4) 风险评估（含 4.1 风险识别 / 4.2 评估方法 / 4.3 风险评价 FMEA 表）
-   5) 风险控制措施
-   6) 风险评估结论
-   7) 再评估
-   8) 参考文件
-2. 风险识别采用五因素法（人员、设备与设施、物料、法规/程序、环境），每个维度可包含多个风险点。
-3. 输出风险识别清单表格，至少包含：序号、风险维度、风险点/失效模式、潜在后果。并为每个风险点提供稳定 risk_id。
-4. FMEA 要求：
-   - 评分维度：严重性 S、可能性 P、可测性 D；每个维度取值 9/6/3/1。
-   - RPN = S × P × D。
-   - 风险等级：RPN < 27 极低；27-53 低；54-107 中；≥108 高。
-   - 每个风险点必须给出 S/P/D 分值与理由、RPN、风险等级、初步结论。
-   - FMEA 表中风险点必须与 4.1 一一对应。
-5. RPN ≥ 54 的中/高风险必须给出具体改进/追加控制措施（SOP/培训/监测/数据完整性/双人复核等）。
-6. 评估目标仅作为倾向，若结论不可接受必须给出理由与整改建议。
-7. 模板无占位符：请遵循模板的标题层级和表达风格，但仍要确保以上章节全部出现。
+export function buildActionsPrompt(input: {
+  scoredItemsJson: string;
+  scope: string;
+  background: string;
+  objectiveBias: string;
+}): string {
+  return `任务：仅针对中、高风险（系统在输入中标注 need_actions=true 的项）提出改进/追加控制措施。
 
-${outputRequirement}`;
+输出要求（严格）：
+- 输出JSON数组，每个元素：{"risk_id":"...","actions":[...]}
+- 每条action必须包含字段：
+  - type: SOP/规程 | 培训与资质 | 设备/系统 | 监测与报警 | 数据完整性 | 双人复核/独立审核 | 其他
+  - action_text: 具体可执行动作（必须包含“做什么/怎么做”，并尽量写明输出/留存的记录或证据）
+  - owner_role: 责任角色（例如：QA、QC、生产主管、验证、工程/设备、自动化、IT、CSV等）
+  - owner_dept: 责任部门（例如：质量保证部、质量控制部、生产部、工程部、信息部等）
+  - planned_date: 计划完成日期（YYYY-MM-DD）
+- 措施必须与该风险的 failure_mode 强关联，避免泛泛而谈
+- 若输入中某 risk_id 的 need_actions=false，你不得为其输出 actions
 
-  return { system, user };
+输入（带评分、RPN、是否需要措施标记；scored_items_json由系统生成，你只负责补全actions）：
+${input.scoredItemsJson}
+
+上下文（用户输入）：
+[范围] ${input.scope}
+[背景] ${input.background}
+[评估目标倾向] ${input.objectiveBias}
+`;
+}
+
+export function buildMarkdownRenderPrompt(input: {
+  title: string;
+  templateContent: string;
+  scope: string;
+  background: string;
+  objectiveBias: string;
+  riskItemsJson: string;
+  scoredItemsJson: string;
+  actionsJson: string;
+}): string {
+  return `任务：根据模板与结构化输入输出完整的 Markdown 风险评估报告。
+
+报告必须包含以下章节并按顺序输出：
+1) 概述
+2) 目的
+3) 范围
+4) 风险评估（含 4.1 风险识别 / 4.2 评估方法 / 4.3 风险评价 FMEA 表）
+5) 风险控制措施
+6) 风险评估结论
+7) 再评估
+8) 参考文件
+
+强制规则：
+- 风险识别表、FMEA 表、控制措施表均使用“序号”，不要输出 risk_id。
+- FMEA 表须展示 S/P/D、理由、RPN、等级，并在最后一列给出对应的控制/改进措施（基于序号与控制措施数据匹配，每条控制措施前增加序号；若无措施填“—”）。
+- 中/高风险（RPN>=54）必须有控制措施。
+
+项目标题：${input.title}
+
+上下文（用户输入）：
+[范围] ${input.scope}
+[背景] ${input.background}
+[评估目标倾向] ${input.objectiveBias}
+
+模板（用于章节标题与格式参考）：
+${input.templateContent}
+
+风险识别清单（含序号）：
+${input.riskItemsJson}
+
+FMEA 评分（含序号、RPN、等级）：
+${input.scoredItemsJson}
+
+控制措施（含序号）：
+${input.actionsJson}
+`;
 }
