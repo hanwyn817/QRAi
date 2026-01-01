@@ -38,7 +38,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           <span className="brand-tag">质量风险评估工作台</span>
         </div>
         <nav className="app-nav">
-          <Link to="/">项目</Link>
+          <Link to="/">首页</Link>
           {user?.role === "admin" ? <Link to="/admin/templates">模板管理</Link> : null}
         </nav>
         <div className="app-user">

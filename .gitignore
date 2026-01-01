@@ -9,3 +9,11 @@ apps/web/dist
 .wrangler
 wrangler.lock
 *.log
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm

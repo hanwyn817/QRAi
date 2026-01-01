@@ -11,6 +11,33 @@ const ALLOWED_EVAL_TOOLS = new Set(["FMEA"]);
 const normalizeEvalTool = (value: string | null | undefined) => {
   return value && ALLOWED_EVAL_TOOLS.has(value) ? value : "FMEA";
 };
+const normalizeProcessSteps = (raw: unknown) => {
+  if (!Array.isArray(raw)) {
+    return null;
+  }
+  return raw
+    .map((item, index) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const record = item as Record<string, unknown>;
+      const stepName = typeof record.step_name === "string" ? record.step_name.trim() : "";
+      if (!stepName) {
+        return null;
+      }
+      const stepId = typeof record.step_id === "string" ? record.step_id.trim() : "";
+      return { step_id: stepId || `step_${index + 1}`, step_name: stepName };
+    })
+    .filter((item) => Boolean(item));
+};
+const parseProcessStepsFromDb = (value: unknown) => {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+  const parsed = safeJsonParse(value);
+  const steps = normalizeProcessSteps(parsed);
+  return steps && steps.length > 0 ? steps : [];
+};
 
 app.use("*", async (c, next) => {
   const originHeader = c.req.header("Origin");
@@ -222,7 +249,7 @@ app.get("/api/projects/:id", requireAuth, async (c) => {
   }
 
   const inputs = await c.env.DB.prepare(
-    "SELECT scope, background, objective, risk_method, eval_tool, template_id, updated_at FROM project_inputs WHERE project_id = ?"
+    "SELECT scope, background, objective, risk_method, eval_tool, process_steps, template_id, updated_at FROM project_inputs WHERE project_id = ?"
   )
     .bind(projectId)
     .first();
@@ -239,7 +266,11 @@ app.get("/api/projects/:id", requireAuth, async (c) => {
     .bind(projectId)
     .all();
 
-  return c.json({ project, inputs, files: files.results ?? [], reports: reports.results ?? [] });
+  const normalizedInputs = inputs
+    ? { ...inputs, process_steps: parseProcessStepsFromDb((inputs as any).process_steps) }
+    : inputs;
+
+  return c.json({ project, inputs: normalizedInputs, files: files.results ?? [], reports: reports.results ?? [] });
 });
 
 app.delete("/api/projects/:id", requireAuth, async (c) => {
@@ -333,16 +364,33 @@ app.patch("/api/projects/:id/inputs", requireAuth, async (c) => {
   const objective = typeof body?.objective === "string" ? body.objective.trim() : null;
   const riskMethod = typeof body?.riskMethod === "string" ? body.riskMethod.trim() : null;
   const evalTool = typeof body?.evalTool === "string" ? body.evalTool.trim() : null;
+  const hasProcessSteps = Object.prototype.hasOwnProperty.call(body ?? {}, "processSteps");
+  const processStepsRaw = hasProcessSteps ? body?.processSteps : null;
   const templateId = typeof body?.templateId === "string" ? body.templateId.trim() : null;
 
   if (evalTool && !ALLOWED_EVAL_TOOLS.has(evalTool)) {
     return c.json({ error: "评估工具暂未开放" }, 400);
   }
+  if (hasProcessSteps && !Array.isArray(processStepsRaw)) {
+    return c.json({ error: "流程步骤格式不正确" }, 400);
+  }
+  const processSteps = hasProcessSteps ? normalizeProcessSteps(processStepsRaw) : null;
+  const processStepsJson = hasProcessSteps ? JSON.stringify(processSteps ?? []) : null;
 
   await c.env.DB.prepare(
-    `UPDATE project_inputs SET scope = COALESCE(?, scope), background = COALESCE(?, background), objective = COALESCE(?, objective), risk_method = COALESCE(?, risk_method), eval_tool = COALESCE(?, eval_tool), template_id = COALESCE(?, template_id), updated_at = ? WHERE project_id = ?`
+    `UPDATE project_inputs SET scope = COALESCE(?, scope), background = COALESCE(?, background), objective = COALESCE(?, objective), risk_method = COALESCE(?, risk_method), eval_tool = COALESCE(?, eval_tool), process_steps = COALESCE(?, process_steps), template_id = COALESCE(?, template_id), updated_at = ? WHERE project_id = ?`
   )
-    .bind(scope, background, objective, riskMethod, evalTool, templateId, nowIso(), projectId)
+    .bind(
+      scope,
+      background,
+      objective,
+      riskMethod,
+      evalTool,
+      processStepsJson,
+      templateId,
+      nowIso(),
+      projectId
+    )
     .run();
 
   await c.env.DB.prepare("UPDATE projects SET updated_at = ? WHERE id = ?").bind(nowIso(), projectId).run();
@@ -434,7 +482,7 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
   let templateContent = typeof body?.templateContent === "string" ? body.templateContent : null;
 
   const inputs = await c.env.DB.prepare(
-    "SELECT scope, background, objective, risk_method, eval_tool, template_id FROM project_inputs WHERE project_id = ?"
+    "SELECT scope, background, objective, risk_method, eval_tool, process_steps, template_id FROM project_inputs WHERE project_id = ?"
   )
     .bind(projectId)
     .first();
@@ -504,6 +552,7 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
       objective: (inputs?.objective as string) ?? null,
       riskMethod: (inputs?.risk_method as string) ?? null,
       evalTool: normalizeEvalTool((inputs?.eval_tool as string) ?? null),
+      processSteps: parseProcessStepsFromDb((inputs as any)?.process_steps),
       templateContent: templateContent ?? null,
       sopTexts,
       literatureTexts,
@@ -560,7 +609,7 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
   let templateContent = typeof body?.templateContent === "string" ? body.templateContent : null;
 
   const inputs = await c.env.DB.prepare(
-    "SELECT scope, background, objective, risk_method, eval_tool, template_id FROM project_inputs WHERE project_id = ?"
+    "SELECT scope, background, objective, risk_method, eval_tool, process_steps, template_id FROM project_inputs WHERE project_id = ?"
   )
     .bind(projectId)
     .first();
@@ -655,6 +704,7 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
               objective: (inputs?.objective as string) ?? null,
               riskMethod: (inputs?.risk_method as string) ?? null,
               evalTool: normalizeEvalTool((inputs?.eval_tool as string) ?? null),
+              processSteps: parseProcessStepsFromDb((inputs as any)?.process_steps),
               templateContent: templateContent ?? null,
               sopTexts,
               literatureTexts,

@@ -4,7 +4,7 @@ import { api } from "../lib/api";
 import { extractTextFromFile } from "../lib/fileText";
 import { renderMarkdown } from "../lib/markdown";
 
-const RISK_METHODS = ["五因素法"];
+const RISK_METHODS = ["五因素法", "流程法"];
 const EVAL_TOOLS = [
   { value: "FMEA", label: "FMEA", disabled: false },
   { value: "FMECA", label: "FMECA（暂未开放）", disabled: true },
@@ -14,6 +14,22 @@ const ALLOWED_EVAL_TOOLS = new Set(["FMEA"]);
 
 const normalizeEvalTool = (value: string | null | undefined) => {
   return value && ALLOWED_EVAL_TOOLS.has(value) ? value : "FMEA";
+};
+const formatProcessSteps = (steps?: Array<{ step_name: string }> | null) => {
+  if (!steps || steps.length === 0) {
+    return "";
+  }
+  return steps.map((step) => step.step_name).filter(Boolean).join("\n");
+};
+const parseProcessStepsText = (value: string) => {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((stepName, index) => ({
+      step_id: `step_${index + 1}`,
+      step_name: stepName
+    }));
 };
 const WORKFLOW_STEPS = [
   { id: "context", label: "准备上下文" },
@@ -56,6 +72,7 @@ export default function ProjectDetail() {
     objective: "",
     riskMethod: "五因素法",
     evalTool: "FMEA",
+    processStepsText: "",
     templateId: ""
   });
   const [templates, setTemplates] = useState<Array<{ id: string; name: string; description: string | null }>>([]);
@@ -429,6 +446,7 @@ export default function ProjectDetail() {
       objective: result.data.inputs?.objective ?? "",
       riskMethod: result.data.inputs?.risk_method ?? "五因素法",
       evalTool: normalizeEvalTool(result.data.inputs?.eval_tool),
+      processStepsText: formatProcessSteps(result.data.inputs?.process_steps),
       templateId: result.data.inputs?.template_id ?? ""
     });
   };
@@ -635,6 +653,8 @@ export default function ProjectDetail() {
     if (!projectId) {
       return false;
     }
+    const processStepsText =
+      typeof patch.processStepsText === "string" ? patch.processStepsText : inputs.processStepsText;
     setLoading(true);
     const result = await api.updateProjectInputs(projectId, {
       scope: patch.scope,
@@ -642,6 +662,7 @@ export default function ProjectDetail() {
       objective: patch.objective,
       riskMethod: patch.riskMethod,
       evalTool: patch.evalTool,
+      processSteps: parseProcessStepsText(processStepsText),
       templateId: patch.templateId
     });
     setLoading(false);
@@ -661,6 +682,7 @@ export default function ProjectDetail() {
       objective: inputs.objective,
       riskMethod: inputs.riskMethod,
       evalTool: inputs.evalTool,
+      processStepsText: inputs.processStepsText,
       templateId: inputs.templateId
     });
   };
@@ -1180,6 +1202,17 @@ export default function ProjectDetail() {
                   ))}
                 </select>
               </label>
+              {inputs.riskMethod.includes("流程") ? (
+                <label style={{ gridColumn: "1 / -1" }}>
+                  流程步骤
+                  <textarea
+                    value={inputs.processStepsText}
+                    onChange={(e) => setInputs((prev) => ({ ...prev, processStepsText: e.target.value }))}
+                    placeholder={`每行一个步骤，例如：\n原料接收\n生产准备\n生产操作\n成品放行`}
+                  />
+                  <span className="muted">每行一个步骤，仅用于流程法风险识别。</span>
+                </label>
+              ) : null}
             </div>
           </div>
 

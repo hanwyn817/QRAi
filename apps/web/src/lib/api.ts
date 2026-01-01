@@ -110,6 +110,7 @@ export const api = {
         objective: string | null;
         risk_method: string | null;
         eval_tool: string | null;
+        process_steps: Array<{ step_id: string; step_name: string }> | null;
         template_id: string | null;
       };
       files: Array<{ id: string; type: string; filename: string; status: string; created_at: string }>;
@@ -130,6 +131,7 @@ export const api = {
     objective?: string;
     riskMethod?: string;
     evalTool?: string;
+    processSteps?: Array<{ step_id: string; step_name: string }>;
     templateId?: string;
   }) {
     return request<{ ok: boolean }>(`/api/projects/${id}/inputs`, {
