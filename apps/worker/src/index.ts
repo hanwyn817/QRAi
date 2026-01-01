@@ -666,6 +666,15 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
               },
               onContextStage: (message) => {
                 send("context", { message });
+              },
+              onContextStages: (messages) => {
+                send("context_stages", { messages });
+              },
+              onContextMeta: (meta) => {
+                send("context_meta", meta);
+              },
+              onContextEvidence: (items) => {
+                send("context_evidence", { items });
               }
             },
             { signal: abortController.signal }

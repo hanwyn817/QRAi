@@ -71,6 +71,16 @@ export default function ProjectDetail() {
   const [stepErrors, setStepErrors] = useState<Record<string, string>>({});
   const [globalErrorMessage, setGlobalErrorMessage] = useState<string | null>(null);
   const [contextStageMessage, setContextStageMessage] = useState<string | null>(null);
+  const [contextStageLog, setContextStageLog] = useState<string[]>([]);
+  const [contextEvidence, setContextEvidence] = useState<
+    Array<{ source: string; content: string; score: number }>
+  >([]);
+  const [contextMeta, setContextMeta] = useState<{
+    usedEmbedding: boolean;
+    sopTextCount: number;
+    literatureTextCount: number;
+    evidenceChunkCount: number;
+  } | null>(null);
   const [workflowSteps, setWorkflowSteps] = useState(
     WORKFLOW_STEPS.map((step) => ({ ...step, status: "pending" as WorkflowStepStatus }))
   );
@@ -463,24 +473,48 @@ export default function ProjectDetail() {
 
   const renderStructuredTable = () => {
     const output = activeStructuredOutput ?? activePartialOutput;
-    if (!output) {
-      if (activeStepId === "context") {
-        return (
-          <div className="stream-hint">
-            {contextStageMessage ? `准备上下文：${contextStageMessage}` : "准备上下文处理中..."}
-          </div>
-        );
-      }
+    if (activeStepId === "context") {
+      const stageText = contextStageLog.length > 0 ? contextStageLog.join(" / ") : "";
       return (
-        <div className="stream-hint">
-          {activeStepLabel ? `${activeStepLabel} 输出生成中...` : "结构化输出生成中..."}
+        <div className="context-evidence">
+          <div className="stream-hint">
+            {stageText ? `准备上下文：${stageText}` : contextStageMessage ? `准备上下文：${contextStageMessage}` : "准备上下文处理中..."}
+          </div>
+          {contextStageLog.length > 0 ? (
+            <div className="context-stage-log">
+              {contextStageLog.map((item, index) => (
+                <span key={`${item}-${index}`} className="context-stage-pill">
+                  {item}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {contextMeta ? (
+            <div className="context-meta muted">
+              {contextMeta.usedEmbedding ? "向量化检索" : "关键词检索"} · SOP 文本 {contextMeta.sopTextCount} · 文献文本{" "}
+              {contextMeta.literatureTextCount} · 证据片段 {contextMeta.evidenceChunkCount}
+            </div>
+          ) : null}
+          {contextEvidence.length > 0 ? (
+            <div className="context-evidence-list">
+              {contextEvidence.map((item, index) => (
+                <div key={`${item.source}-${index}`} className="context-evidence-item">
+                  <div className="context-evidence-meta">
+                    <span className="pill">{item.source === "sop" ? "SOP" : "文献"}</span>
+                    <span className="muted">相似度 {item.score.toFixed(3)}</span>
+                  </div>
+                  <div className="context-evidence-content">{item.content}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       );
     }
-    if (activeStepId === "context") {
+    if (!output) {
       return (
         <div className="stream-hint">
-          {contextStageMessage ? `准备上下文：${contextStageMessage}` : "准备上下文处理中..."}
+          {activeStepLabel ? `${activeStepLabel} 输出生成中...` : "结构化输出生成中..."}
         </div>
       );
     }
@@ -638,6 +672,28 @@ export default function ProjectDetail() {
     if (filesArray.length === 0) {
       return;
     }
+    const extractSummaries: Array<{
+      name: string;
+      meta: {
+        type: string;
+        extractedChars: number;
+        pageCount?: number;
+        emptyPages?: number;
+        workerFallback?: boolean;
+        errors?: string[];
+      };
+    }> = [];
+    const emptyExtracts: Array<{
+      name: string;
+      meta: {
+        type: string;
+        extractedChars: number;
+        pageCount?: number;
+        emptyPages?: number;
+        workerFallback?: boolean;
+        errors?: string[];
+      };
+    }> = [];
     setLoading(true);
     setMessage(null);
     setUploadState((prev) => ({
@@ -647,9 +703,24 @@ export default function ProjectDetail() {
     for (const file of filesArray) {
       let extractedText = "";
       try {
-        extractedText = await extractTextFromFile(file);
-      } catch {
+        const result = await extractTextFromFile(file);
+        extractedText = result.text;
+        extractSummaries.push({ name: file.name, meta: result.meta });
+        if (!result.text.trim()) {
+          emptyExtracts.push({ name: file.name, meta: result.meta });
+        }
+      } catch (error) {
         extractedText = "";
+        const meta = {
+          type: "unknown",
+          extractedChars: 0,
+          errors: [error instanceof Error ? error.message : "提取失败"]
+        };
+        extractSummaries.push({ name: file.name, meta });
+        emptyExtracts.push({
+          name: file.name,
+          meta
+        });
       }
       const form = new FormData();
       form.append("file", file);
@@ -674,6 +745,24 @@ export default function ProjectDetail() {
       ...prev,
       [type]: { ...prev[type], active: false }
     }));
+    const totalExtractedChars = extractSummaries.reduce((total, item) => total + (item.meta.extractedChars || 0), 0);
+    let message = `提取文本长度：${totalExtractedChars}`;
+    if (emptyExtracts.length > 0) {
+      const detail = emptyExtracts
+        .map((item) => {
+          const meta = item.meta;
+          const parts = [
+            meta.type === "pdf" && meta.pageCount ? `页数 ${meta.pageCount}` : null,
+            `字符 ${meta.extractedChars}`,
+            meta.workerFallback ? "已回退" : null,
+            meta.errors && meta.errors.length > 0 ? `错误 ${meta.errors.join(" | ")}` : null
+          ].filter(Boolean);
+          return `${item.name}（${parts.join("，")}）`;
+        })
+        .join("；");
+      message += `；以下文件未提取到可检索文本，将不会参与检索：${detail}`;
+    }
+    setMessage(message);
     await loadProject();
   };
 
@@ -707,6 +796,9 @@ export default function ProjectDetail() {
     setStepErrors({});
     setGlobalErrorMessage(null);
     setContextStageMessage(null);
+    setContextStageLog([]);
+    setContextEvidence([]);
+    setContextMeta(null);
     resetWorkflowSteps();
     hasReportContentRef.current = false;
     stepStartTimesRef.current = {};
@@ -835,6 +927,41 @@ export default function ProjectDetail() {
             return;
           }
           setContextStageMessage(messageText);
+          setContextStageLog((prev) => {
+            if (prev[prev.length - 1] === messageText) {
+              return prev;
+            }
+            return [...prev, messageText];
+          });
+          return;
+        }
+        if (eventName === "context_stages") {
+          const messages = Array.isArray(payload.messages)
+            ? payload.messages.filter((item) => typeof item === "string")
+            : [];
+          if (messages.length === 0) {
+            return;
+          }
+          setContextStageLog(messages);
+          setContextStageMessage(messages[messages.length - 1] ?? null);
+          return;
+        }
+        if (eventName === "context_evidence") {
+          const items = Array.isArray(payload.items) ? payload.items : [];
+          setContextEvidence(items);
+          return;
+        }
+        if (eventName === "context_meta") {
+          const usedEmbedding = Boolean(payload.usedEmbedding);
+          const sopTextCount = Number(payload.sopTextCount ?? 0);
+          const literatureTextCount = Number(payload.literatureTextCount ?? 0);
+          const evidenceChunkCount = Number(payload.evidenceChunkCount ?? 0);
+          setContextMeta({
+            usedEmbedding,
+            sopTextCount,
+            literatureTextCount,
+            evidenceChunkCount
+          });
           return;
         }
         if (eventName === "usage") {

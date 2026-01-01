@@ -14,7 +14,7 @@ export const DEFAULT_TEMPLATE = `# 风险评估报告
 
 ### 4.3 风险评价（评估表）
 
-## 5. 风险控制措施
+## 5. 控制措施
 
 ## 6. 风险评估结论
 
@@ -188,21 +188,11 @@ export function buildMarkdownRenderPrompt(input: {
   scoredItemsJson: string;
   actionsJson: string;
 }): string {
-  return `任务：根据模板与结构化输入输出完整的 Markdown 风险评估报告。
-
-报告必须包含以下章节并按顺序输出：
-1) 概述
-2) 目的
-3) 范围
-4) 风险评估（含 4.1 风险识别 / 4.2 评估方法 / 4.3 风险评价 FMEA 表）
-5) 风险控制措施
-6) 风险评估结论
-7) 再评估
-8) 参考文件
+  return `任务：根据模板与结构化输入，输出完整的 Markdown 风险评估报告。
 
 强制规则：
-- 风险识别表、FMEA 表、控制措施表均使用“序号”，不要输出 risk_id。
-- FMEA 表须展示 S/P/D、理由、RPN、等级，并在最后一列给出对应的控制/改进措施（基于序号与控制措施数据匹配，每条控制措施前增加序号；若无措施填“—”）。
+- 风险识别表、风险评价表、控制措施表均使用“序号”，不要输出 risk_id。
+- 风险评价表须展示 S/P/D、理由、RPN、等级，并在最后一列给出对应的控制/改进措施（基于序号与控制措施数据匹配，每条控制措施前增加序号；若无措施填“—”）。
 - 中/高风险（RPN>=54）必须有控制措施。
 
 项目标题：${input.title}
@@ -212,13 +202,13 @@ export function buildMarkdownRenderPrompt(input: {
 [背景] ${input.background}
 [评估目标倾向] ${input.objectiveBias}
 
-模板（用于章节标题与格式参考）：
+模板（必须按照模版中给定的章节标题按顺序输出，且不能省略）：
 ${input.templateContent}
 
 风险识别清单（含序号）：
 ${input.riskItemsJson}
 
-FMEA 评分（含序号、RPN、等级）：
+风险评价表（含序号、RPN、等级）：
 ${input.scoredItemsJson}
 
 控制措施（含序号）：

@@ -16,7 +16,8 @@ import type {
   ReportInput,
   RiskIdentificationOutput,
   RiskItem,
-  TokenUsage
+  TokenUsage,
+  WorkflowContext
 } from "./aiTypes";
 import { buildWorkflowContext, mergeScoring, validateActionsOutput, validateRiskIdentification } from "./workflow";
 
@@ -31,6 +32,29 @@ const ACTION_TYPES = [
   "双人复核/独立审核",
   "其他"
 ];
+
+function normalizeFiveFactorDimension(value: string): string | null {
+  const normalized = value.replace(/\s+/g, "").replace(/[()（）]/g, "");
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "人员") {
+    return "人员";
+  }
+  if (normalized === "环境") {
+    return "环境";
+  }
+  if (normalized.includes("设备") || normalized.includes("设施")) {
+    return "设备与设施";
+  }
+  if (normalized.includes("物料") || normalized.includes("原料")) {
+    return "物料";
+  }
+  if (normalized.includes("法规") || normalized.includes("程序") || normalized.includes("规程")) {
+    return "法规/程序";
+  }
+  return FIVE_FACTOR_DIMENSIONS.includes(normalized) ? normalized : null;
+}
 
 type StepStatus = "running" | "done";
 type StepName =
@@ -47,6 +71,9 @@ type StreamHandlers = {
   onStep?: (step: StepName, status: StepStatus) => void;
   onLlmDelta?: (step: StepName, delta: string) => void;
   onContextStage?: (message: string) => void;
+  onContextStages?: (messages: string[]) => void;
+  onContextMeta?: (meta: WorkflowContext["retrievalMeta"]) => void;
+  onContextEvidence?: (items: Array<{ source: string; content: string; score: number }>) => void;
 };
 
 function pickUsage(usage?: TokenUsage | null): TokenUsage | undefined {
@@ -444,7 +471,15 @@ function parseRiskIdentification(raw: unknown, expectedMode: "five_factors" | "p
     if (typeof entry.dimension !== "string" || !entry.dimension.trim()) {
       throw new Error(`风险项#${index + 1} dimension 非法`);
     }
-    if (expectedMode === "five_factors" && !FIVE_FACTOR_DIMENSIONS.includes(entry.dimension as string)) {
+    let dimension = entry.dimension.trim();
+    if (expectedMode === "five_factors") {
+      const normalized = normalizeFiveFactorDimension(dimension);
+      if (!normalized) {
+        throw new Error(`风险项#${index + 1} dimension 非法`);
+      }
+      dimension = normalized;
+    }
+    if (expectedMode === "five_factors" && !FIVE_FACTOR_DIMENSIONS.includes(dimension)) {
       throw new Error(`风险项#${index + 1} dimension 非法`);
     }
     if (expectedMode === "five_factors" && entry.dimension_id !== null) {
@@ -462,7 +497,7 @@ function parseRiskIdentification(raw: unknown, expectedMode: "five_factors" | "p
     items.push({
       risk_id: typeof entry.risk_id === "string" ? entry.risk_id : RISK_ID_PLACEHOLDER,
       dimension_type: dimensionType,
-      dimension: entry.dimension as string,
+      dimension,
       dimension_id: entry.dimension_id as string | null,
       failure_mode: entry.failure_mode as string,
       consequence: entry.consequence as string
@@ -569,12 +604,7 @@ function parseActions(raw: unknown, requiredIds: string[]): ActionOutput {
     return { risk_id: record.risk_id as string, actions };
   });
   const required = new Set(requiredIds);
-  for (const entry of output) {
-    if (!required.has(entry.risk_id)) {
-      throw new Error(`出现不需要措施的 risk_id: ${entry.risk_id}`);
-    }
-  }
-  return output;
+  return output.filter((entry) => required.has(entry.risk_id));
 }
 
 function ensureActionsForRisks(actions: ActionOutput, scoredItems: ScoredRiskItem[]): ActionOutput {
@@ -609,6 +639,16 @@ function ensureNotAborted(signal?: AbortSignal) {
   }
 }
 
+async function sleep(ms: number, signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new Error("请求已取消");
+  }
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+  if (signal?.aborted) {
+    throw new Error("请求已取消");
+  }
+}
+
 async function runWorkflow(
   env: Env,
   input: ReportInput,
@@ -617,9 +657,25 @@ async function runWorkflow(
 ): Promise<GeneratedReport> {
   ensureNotAborted(signal);
   handlers?.onStep?.("context", "running");
+  const contextStages: string[] = [];
   const context = await buildWorkflowContext(env, input, undefined, {
-    onStage: (message) => handlers?.onContextStage?.(message)
+    onStage: (message) => {
+      contextStages.push(message);
+      handlers?.onContextStage?.(message);
+    }
   });
+  if (contextStages.length > 0) {
+    handlers?.onContextStages?.(contextStages);
+  }
+  handlers?.onContextMeta?.(context.retrievalMeta);
+  handlers?.onContextEvidence?.(
+    context.evidenceChunks.map((item) => ({
+      source: item.source,
+      content: item.content,
+      score: item.score
+    }))
+  );
+  await sleep(3000, signal);
   handlers?.onStep?.("context", "done");
 
   ensureNotAborted(signal);

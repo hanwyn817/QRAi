@@ -73,7 +73,13 @@ export async function buildWorkflowContext(
     riskMethod,
     evalTool,
     evidenceBlocks,
-    evidenceChunks
+    evidenceChunks,
+    retrievalMeta: {
+      usedEmbedding: hasEmbeddingConfig(env),
+      sopTextCount: input.sopTexts.length,
+      literatureTextCount: input.literatureTexts.length,
+      evidenceChunkCount: evidenceChunks.length
+    }
   };
 }
 
@@ -178,7 +184,7 @@ async function getEmbeddings(env: Env, inputs: string[]): Promise<number[][]> {
     return results;
   }
 
-  const batchSize = 64;
+  const batchSize = 10;
   for (let i = 0; i < missingInputs.length; i += batchSize) {
     const batch = missingInputs.slice(i, i + batchSize);
     const response = await fetch(`${baseUrl}/embeddings`, {
@@ -261,30 +267,37 @@ function collectChunks(
   return sorted.slice(0, topK);
 }
 
-function chunkText(text: string, maxLen = 560): string[] {
+function chunkText(text: string, maxLen = 560, maxChunks = 36): string[] {
   const normalized = text.replace(/\r\n/g, "\n").trim();
   if (!normalized) {
     return [];
   }
-  const paragraphs = normalized.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  const lines = normalized.split(/\n+/).map((part) => part.trim()).filter(Boolean);
+  const baseText = lines.join(" ");
+  const sentenceMatches = baseText.match(/[^。！？；;]+[。！？；;]?/g) ?? [];
+  const sentences = sentenceMatches.map((part) => part.trim()).filter(Boolean);
+  const units = sentences.length > 0 ? sentences : [baseText];
   const chunks: string[] = [];
   let buffer = "";
-  for (const para of paragraphs) {
+  for (const unit of units) {
     if (!buffer) {
-      buffer = para;
+      buffer = unit;
       continue;
     }
-    if (buffer.length + para.length + 1 <= maxLen) {
-      buffer += `\n${para}`;
+    if (buffer.length + unit.length + 1 <= maxLen) {
+      buffer += ` ${unit}`;
       continue;
     }
     chunks.push(buffer.slice(0, maxLen));
-    buffer = para;
+    buffer = unit;
+    if (chunks.length >= maxChunks) {
+      return chunks;
+    }
   }
-  if (buffer) {
+  if (buffer && chunks.length < maxChunks) {
     chunks.push(buffer.slice(0, maxLen));
   }
-  return chunks.slice(0, 12);
+  return chunks.slice(0, maxChunks);
 }
 
 function extractKeywords(text: string): string[] {

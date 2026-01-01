@@ -40,6 +40,12 @@ export type WorkflowContext = {
   evalTool: string;
   evidenceBlocks: string;
   evidenceChunks: EvidenceChunk[];
+  retrievalMeta: {
+    usedEmbedding: boolean;
+    sopTextCount: number;
+    literatureTextCount: number;
+    evidenceChunkCount: number;
+  };
 };
 
 export type RiskItem = {
