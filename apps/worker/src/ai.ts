@@ -57,6 +57,22 @@ function normalizeFiveFactorDimension(value: string): string | null {
   return FIVE_FACTOR_DIMENSIONS.includes(normalized) ? normalized : null;
 }
 
+function parseObjectivePolicy(objectiveBias: string): { allowActions: boolean; forceActions: boolean } {
+  const normalized = objectiveBias.replace(/\s+/g, "");
+  const denyActions =
+    /不(需要|需|用|必)(采取)?(任何)?(措施|行动)/.test(normalized) ||
+    /无需(采取)?(任何)?(措施|行动)/.test(normalized) ||
+    /不采取(任何)?(措施|行动)/.test(normalized) ||
+    /无需改进|不需改进/.test(normalized);
+  if (denyActions) {
+    return { allowActions: false, forceActions: false };
+  }
+  const forceActions =
+    /(希望|需要|必须|计划|拟|想要|要求).{0,8}采取/.test(normalized) ||
+    /采取.{0,12}(措施|行动|改进)/.test(normalized);
+  return { allowActions: true, forceActions };
+}
+
 type StepStatus = "running" | "done";
 type StepName =
   | "context"
@@ -736,7 +752,13 @@ async function runWorkflow(
   usage = accumulateUsage(usage, scoringResponse.usage);
   handlers?.onUsage?.(usage ?? {});
   const scoring = parseFmeaScoring(scoringResponse.data, riskItems.map((item) => item.risk_id));
-  const scoredItems = mergeScoring(riskItems, scoring);
+  const objectivePolicy = parseObjectivePolicy(context.objectiveBias);
+  let scoredItems = mergeScoring(riskItems, scoring);
+  if (!objectivePolicy.allowActions) {
+    scoredItems = scoredItems.map((item) => ({ ...item, need_actions: false }));
+  } else if (objectivePolicy.forceActions) {
+    scoredItems = scoredItems.map((item) => ({ ...item, need_actions: true }));
+  }
   handlers?.onStep?.("fmea_scoring", "done");
 
   ensureNotAborted(signal);

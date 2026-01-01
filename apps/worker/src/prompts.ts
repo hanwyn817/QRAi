@@ -30,6 +30,7 @@ SOP/文献使用规则：
 1) SOP 代表企业既有管理手段与控制措施，不得虚构未提供的内部制度细节。
 2) 文献片段代表外部监管/行业建议，可用于识别风险与提出改进措施。
 3) 在风险评价中，SOP 可用于下调 P（可能性）与 D（可测性），但不应改变 S（严重性）。
+4) 评估目标倾向为最高优先级约束：若明确“不需要采取措施”，后续不得输出新增措施；若明确指定/希望采取某类措施，需在相关输出中体现。
 
 强约束输出规则：
 1) 你输出必须是【有效JSON】，不得包含任何额外文本、解释、Markdown、代码块标记。
@@ -72,7 +73,6 @@ export function buildRiskIdentificationFiveFactorsPrompt(input: {
 上下文（用户输入）：
 [范围] ${input.scope}
 [背景] ${input.background}
-[评估目标倾向] ${input.objectiveBias}
 [模板要求摘要] ${input.templateRequirements}
 
 SOP/文献片段（向量库召回，已按相关性排序；用于辅助推理，不需要在输出中引用）：
@@ -144,6 +144,7 @@ export function buildFmeaScoringPrompt(input: {
   - 注意：你不需要、也不得输出 evidence 或 chunk_id 等结构化引用
 - SOP 用于体现既有控制措施对 P 与 D 的影响：若 SOP 明确规定监测/复核/控制手段，可下调 P 或 D。
 - 文献片段作为外部要求/建议：若文献提出控制但 SOP 未覆盖，不得因 SOP 下调 P/D；S 由后果严重性决定，不因 SOP 变化。
+- 若评估目标倾向明确“风险可控/不需要措施”，可下调 P 或 D，但仍需遵循事实。
 
 风险清单（结构化JSON；包含dimension_type/dimension等上下文）：
 ${input.riskItemsJson}
@@ -178,6 +179,7 @@ export function buildActionsPrompt(input: {
 - 措施必须与该风险的 failure_mode 强关联，避免泛泛而谈
 - 文献片段用于提出改进措施的依据与方向，优先采用文献中的建议/要求。
 - 若 SOP 已覆盖相关控制，仅在存在执行/有效性风险时提出“强化执行/补充记录/复核/培训”等措施，避免重复已有制度。
+- 若评估目标倾向中明确指定措施/行动（例如“采取xx措施”），必须在 actions 中体现。
 - 若输入中某 risk_id 的 need_actions=false，你不得为其输出 actions
 
 输入（带评分、RPN、是否需要措施标记；scored_items_json由系统生成，你只负责补全actions）：
@@ -209,6 +211,7 @@ export function buildMarkdownRenderPrompt(input: {
 - 风险识别表、风险评价表、控制措施表均使用“序号”，不要输出 risk_id。
 - 风险评价表须展示 S/P/D、理由、RPN、等级，并在最后一列给出对应的控制/改进措施（基于序号与控制措施数据匹配，每条控制措施前增加序号；若无措施填“—”）。
 - 中/高风险（RPN>=54）必须有控制措施。
+- 若评估目标倾向明确“不需要采取措施”，控制措施章节可说明“无需新增措施”并保持表格为空或填“—”。
 
 项目标题：${input.title}
 
