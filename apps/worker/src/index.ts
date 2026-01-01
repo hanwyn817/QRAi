@@ -663,6 +663,9 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
               },
               onLlmDelta: (step, delta) => {
                 send("llm", { step, delta });
+              },
+              onContextStage: (message) => {
+                send("context", { message });
               }
             },
             { signal: abortController.signal }

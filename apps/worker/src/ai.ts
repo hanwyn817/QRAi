@@ -46,6 +46,7 @@ type StreamHandlers = {
   onUsage?: (usage: TokenUsage) => void;
   onStep?: (step: StepName, status: StepStatus) => void;
   onLlmDelta?: (step: StepName, delta: string) => void;
+  onContextStage?: (message: string) => void;
 };
 
 function pickUsage(usage?: TokenUsage | null): TokenUsage | undefined {
@@ -616,7 +617,9 @@ async function runWorkflow(
 ): Promise<GeneratedReport> {
   ensureNotAborted(signal);
   handlers?.onStep?.("context", "running");
-  const context = buildWorkflowContext(input);
+  const context = await buildWorkflowContext(env, input, undefined, {
+    onStage: (message) => handlers?.onContextStage?.(message)
+  });
   handlers?.onStep?.("context", "done");
 
   ensureNotAborted(signal);

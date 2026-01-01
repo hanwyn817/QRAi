@@ -10,6 +10,7 @@ import type {
   WorkflowContext
 } from "./aiTypes";
 import { DEFAULT_TEMPLATE } from "./prompts";
+import type { Env } from "./types";
 
 const FIVE_FACTOR_DIMENSIONS = ["人员", "设备与设施", "物料", "法规/程序", "环境"];
 const ACTION_TYPES = [
@@ -21,6 +22,7 @@ const ACTION_TYPES = [
   "双人复核/独立审核",
   "其他"
 ];
+const EMBEDDING_CACHE = new Map<string, number[]>();
 
 export function summarizeTemplateRequirements(templateContent: string | null): string {
   const raw = templateContent?.trim();
@@ -38,7 +40,12 @@ export function summarizeTemplateRequirements(templateContent: string | null): s
   return raw.length > 240 ? `${raw.slice(0, 240)}...` : raw;
 }
 
-export function buildWorkflowContext(input: ReportInput, evidenceTopK = 4): WorkflowContext {
+export async function buildWorkflowContext(
+  env: Env,
+  input: ReportInput,
+  evidenceTopK = 4,
+  options?: { onStage?: (message: string) => void }
+): Promise<WorkflowContext> {
   const scope = input.scope?.trim() || "（未填写）";
   const background = input.background?.trim() || "（未填写）";
   const objectiveBias = input.objective?.trim() || "（未填写）";
@@ -47,7 +54,15 @@ export function buildWorkflowContext(input: ReportInput, evidenceTopK = 4): Work
   const templateRequirements = summarizeTemplateRequirements(input.templateContent || DEFAULT_TEMPLATE);
 
   const query = [scope, background, objectiveBias].filter(Boolean).join(" ");
-  const evidenceChunks = buildEvidenceChunks(input.sopTexts, input.literatureTexts, query, evidenceTopK);
+  const evidenceChunks = await buildEvidenceChunks(
+    env,
+    input.sopTexts,
+    input.literatureTexts,
+    query,
+    evidenceTopK,
+    options
+  );
+  options?.onStage?.("上下文拼装中...");
   const evidenceBlocks = formatEvidenceBlocks(evidenceChunks);
 
   return {
@@ -62,16 +77,168 @@ export function buildWorkflowContext(input: ReportInput, evidenceTopK = 4): Work
   };
 }
 
-function buildEvidenceChunks(
+async function buildEvidenceChunks(
+  env: Env,
   sopTexts: string[],
   literatureTexts: string[],
   query: string,
-  topK: number
-): EvidenceChunk[] {
+  topK: number,
+  options?: { onStage?: (message: string) => void }
+): Promise<EvidenceChunk[]> {
+  if (hasEmbeddingConfig(env)) {
+    return await buildEmbeddingEvidence(env, sopTexts, literatureTexts, query, topK, options);
+  }
+  options?.onStage?.("关键词检索中...");
   const queryTokens = extractKeywords(query);
   const sopChunks = collectChunks("sop", sopTexts, queryTokens, topK);
   const literatureChunks = collectChunks("literature", literatureTexts, queryTokens, topK);
   return [...sopChunks, ...literatureChunks];
+}
+
+function hasEmbeddingConfig(env: Env): boolean {
+  return Boolean(env.DASHSCOPE_API_KEY);
+}
+
+async function buildEmbeddingEvidence(
+  env: Env,
+  sopTexts: string[],
+  literatureTexts: string[],
+  query: string,
+  topK: number,
+  options?: { onStage?: (message: string) => void }
+): Promise<EvidenceChunk[]> {
+  options?.onStage?.("向量化中...");
+  const queryEmbedding = await getEmbeddings(env, [query]);
+  if (queryEmbedding.length === 0) {
+    return [];
+  }
+  const [vector] = queryEmbedding;
+  options?.onStage?.("向量检索中...");
+  const sopChunks = await collectChunksByEmbedding(env, "sop", sopTexts, vector, topK);
+  const literatureChunks = await collectChunksByEmbedding(env, "literature", literatureTexts, vector, topK);
+  return [...sopChunks, ...literatureChunks];
+}
+
+async function collectChunksByEmbedding(
+  env: Env,
+  source: "sop" | "literature",
+  texts: string[],
+  queryEmbedding: number[],
+  topK: number
+): Promise<EvidenceChunk[]> {
+  const chunks: EvidenceChunk[] = [];
+  const chunkTexts: string[] = [];
+  for (const text of texts) {
+    for (const chunk of chunkText(text)) {
+      chunkTexts.push(chunk);
+    }
+  }
+  if (chunkTexts.length === 0) {
+    return [];
+  }
+  const embeddings = await getEmbeddings(env, chunkTexts);
+  if (embeddings.length !== chunkTexts.length) {
+    throw new Error("Embedding 返回数量不匹配");
+  }
+  embeddings.forEach((embedding, index) => {
+    const score = cosineSimilarity(queryEmbedding, embedding);
+    chunks.push({ source, content: chunkTexts[index], score });
+  });
+  const sorted = chunks.sort((a, b) => b.score - a.score || b.content.length - a.content.length);
+  return sorted.slice(0, topK);
+}
+
+async function getEmbeddings(env: Env, inputs: string[]): Promise<number[][]> {
+  if (inputs.length === 0) {
+    return [];
+  }
+  const apiKey = env.DASHSCOPE_API_KEY;
+  if (!apiKey) {
+    return [];
+  }
+  const baseUrl = (env.DASHSCOPE_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1").replace(/\/$/, "");
+  const model = env.DASHSCOPE_EMBEDDING_MODEL || "text-embedding-v4";
+  const prefix = `${baseUrl}|${model}|`;
+  const keys = await Promise.all(inputs.map((text) => hashText(`${prefix}${text}`)));
+  const results: number[][] = new Array(inputs.length);
+  const missingInputs: string[] = [];
+  const missingIndices: number[] = [];
+
+  keys.forEach((key, index) => {
+    const cached = EMBEDDING_CACHE.get(key);
+    if (cached) {
+      results[index] = cached;
+    } else {
+      missingInputs.push(inputs[index]);
+      missingIndices.push(index);
+    }
+  });
+
+  if (missingInputs.length === 0) {
+    return results;
+  }
+
+  const batchSize = 64;
+  for (let i = 0; i < missingInputs.length; i += batchSize) {
+    const batch = missingInputs.slice(i, i + batchSize);
+    const response = await fetch(`${baseUrl}/embeddings`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({ model, input: batch })
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Embedding 请求失败: ${response.status} ${errorText}`);
+    }
+    const data = (await response.json()) as {
+      data?: Array<{ embedding?: number[] }>;
+    };
+    const batchEmbeddings = data.data?.map((item) => item.embedding ?? []) ?? [];
+    if (batchEmbeddings.length !== batch.length) {
+      throw new Error("Embedding 返回缺失");
+    }
+    batchEmbeddings.forEach((embedding, offset) => {
+      const originalIndex = missingIndices[i + offset];
+      const key = keys[originalIndex];
+      results[originalIndex] = embedding;
+      EMBEDDING_CACHE.set(key, embedding);
+    });
+  }
+
+  return results;
+}
+
+async function hashText(text: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  const bytes = new Uint8Array(digest);
+  return Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length === 0 || b.length === 0 || a.length !== b.length) {
+    return 0;
+  }
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const ai = a[i];
+    const bi = b[i];
+    dot += ai * bi;
+    normA += ai * ai;
+    normB += bi * bi;
+  }
+  if (!normA || !normB) {
+    return 0;
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 function collectChunks(

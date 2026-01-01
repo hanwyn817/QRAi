@@ -70,6 +70,7 @@ export default function ProjectDetail() {
   const [activeStepId, setActiveStepId] = useState<string | null>(null);
   const [stepErrors, setStepErrors] = useState<Record<string, string>>({});
   const [globalErrorMessage, setGlobalErrorMessage] = useState<string | null>(null);
+  const [contextStageMessage, setContextStageMessage] = useState<string | null>(null);
   const [workflowSteps, setWorkflowSteps] = useState(
     WORKFLOW_STEPS.map((step) => ({ ...step, status: "pending" as WorkflowStepStatus }))
   );
@@ -463,9 +464,23 @@ export default function ProjectDetail() {
   const renderStructuredTable = () => {
     const output = activeStructuredOutput ?? activePartialOutput;
     if (!output) {
+      if (activeStepId === "context") {
+        return (
+          <div className="stream-hint">
+            {contextStageMessage ? `准备上下文：${contextStageMessage}` : "准备上下文处理中..."}
+          </div>
+        );
+      }
       return (
         <div className="stream-hint">
           {activeStepLabel ? `${activeStepLabel} 输出生成中...` : "结构化输出生成中..."}
+        </div>
+      );
+    }
+    if (activeStepId === "context") {
+      return (
+        <div className="stream-hint">
+          {contextStageMessage ? `准备上下文：${contextStageMessage}` : "准备上下文处理中..."}
         </div>
       );
     }
@@ -691,6 +706,7 @@ export default function ProjectDetail() {
     setActiveStepId(null);
     setStepErrors({});
     setGlobalErrorMessage(null);
+    setContextStageMessage(null);
     resetWorkflowSteps();
     hasReportContentRef.current = false;
     stepStartTimesRef.current = {};
@@ -770,6 +786,9 @@ export default function ProjectDetail() {
             setMessage(`正在执行：${label}`);
             setActiveStepId(stepId);
             stepStartTimesRef.current[stepId] = Date.now();
+            if (stepId === "context") {
+              setContextStageMessage(null);
+            }
           }
           return;
         }
@@ -808,6 +827,14 @@ export default function ProjectDetail() {
             }
             return { ...prev, [stepId]: { raw, parsed } };
           });
+          return;
+        }
+        if (eventName === "context") {
+          const messageText = typeof payload.message === "string" ? payload.message : "";
+          if (!messageText) {
+            return;
+          }
+          setContextStageMessage(messageText);
           return;
         }
         if (eventName === "usage") {
@@ -1247,7 +1274,9 @@ export default function ProjectDetail() {
                         {step.status === "pending"
                           ? "待执行"
                           : step.status === "running"
-                            ? "进行中"
+                            ? step.id === "context" && contextStageMessage
+                              ? `进行中：${contextStageMessage}`
+                              : "进行中"
                             : step.status === "error"
                               ? `异常：${stepErrors[step.id] ?? globalErrorMessage ?? "未知错误"}`
                               : "完成"}

@@ -11,6 +11,9 @@ export type Env = {
   EXPORT_RENDER_MODE?: string;
   ADMIN_BOOTSTRAP_KEY?: string;
   REPORT_TIMEZONE?: string;
+  DASHSCOPE_API_KEY?: string;
+  DASHSCOPE_BASE_URL?: string;
+  DASHSCOPE_EMBEDDING_MODEL?: string;
 };
 
 export type User = {
