@@ -159,7 +159,7 @@ export const api = {
       `/api/reports/${id}?includeContent=${includeContent ? 1 : 0}`
     );
   },
-  async exportReport(id: string, format: "pdf" | "docx") {
+  async exportReport(id: string, format: "docx") {
     return request<{ id: string; status: string }>(`/api/reports/${id}/exports`, {
       method: "POST",
       body: JSON.stringify({ format })

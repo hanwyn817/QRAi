@@ -6,6 +6,7 @@ import { renderMarkdown } from "../lib/markdown";
 type ReportInfo = {
   id: string;
   project_id: string;
+  project_title?: string | null;
   version: number;
   status: string;
   created_at: string;
@@ -67,12 +68,12 @@ export default function ReportPreview() {
     loadReport();
   }, [reportId]);
 
-  const handleExport = async (format: "pdf" | "docx") => {
+  const handleExport = async () => {
     if (!reportId) {
       return;
     }
     setLoading(true);
-    const result = await api.exportReport(reportId, format);
+    const result = await api.exportReport(reportId, "docx");
     setLoading(false);
     if (result.error || !result.data) {
       setMessage(result.error ?? "导出失败");
@@ -86,12 +87,13 @@ export default function ReportPreview() {
         report.completion_tokens ?? "-"
       }）`
     : "-";
+  const reportTitle = report?.project_title?.trim() ? `${report.project_title} ` : "";
 
   return (
     <div className="report-page">
       <div className="report-header">
         <div>
-          <h2>{report ? `报告版本 ${report.version}` : "报告版本"}</h2>
+          <h2>{report ? `${reportTitle}报告版本 ${report.version}` : "报告版本"}</h2>
           <p className="muted">
             状态：{" "}
             <span className={`status-pill status-${report?.status ?? "unknown"}`}>
@@ -100,11 +102,8 @@ export default function ReportPreview() {
           </p>
         </div>
         <div className="report-header-actions">
-          <button className="ghost" onClick={() => handleExport("docx")} disabled={loading}>
+          <button className="ghost" onClick={handleExport} disabled={loading}>
             导出 Word
-          </button>
-          <button className="ghost" onClick={() => handleExport("pdf")} disabled={loading}>
-            导出 PDF
           </button>
           {exportLink ? (
             <a className="link" href={exportLink} target="_blank" rel="noreferrer">

@@ -1,6 +1,6 @@
 # QRAi
 
-面向药品生产企业质量管理人员的风险评估报告生成工具，支持多用户、多模板、报告版本管理，并输出 Markdown / Word / PDF。
+面向药品生产企业质量管理人员的风险评估报告生成工具，支持多用户、多模板、报告版本管理，并输出 Markdown / Word。
 
 ## 技术架构
 
@@ -8,7 +8,7 @@
 - 后端：Cloudflare Workers（Hono）
 - 数据库：Cloudflare D1（生产环境）
 - 文件存储：Cloudflare R2（生产环境）
-- 导出服务：外部渲染服务（PDF/DOCX）
+- 导出服务：Worker 本地渲染（DOCX）
 
 ## 本地开发（不依赖 Cloudflare 云端服务）
 
@@ -30,16 +30,12 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o-mini
 APP_ENV=local
 APP_ORIGIN=http://localhost:5173
-EXPORT_RENDER_URL=你的外部渲染服务
-EXPORT_RENDER_API_KEY=
-EXPORT_RENDER_MODE=markdown
 ADMIN_BOOTSTRAP_KEY=本地管理员初始化密钥
 REPORT_TIMEZONE=Asia/Shanghai
 ```
 
 说明：
 - `APP_ENV=local` 会禁用 Secure Cookie，便于本地 http 调试。
-- `EXPORT_RENDER_URL` 未配置时，导出会返回错误（可先留空）。
 
 ### 3) 初始化本地 D1
 
@@ -73,7 +69,7 @@ npm run dev:web
 ## 生产部署（Cloudflare）
 
 1. 创建 D1 数据库与 R2 Bucket，并将 ID/名称写入 `apps/worker/wrangler.toml`。
-2. 设置 Workers 环境变量（如 `OPENAI_API_KEY`、`EXPORT_RENDER_URL` 等）。
+2. 设置 Workers 环境变量（如 `OPENAI_API_KEY` 等）。
 3. 部署 Workers：
 
 ```bash
@@ -146,20 +142,6 @@ vars = { APP_ENV = "production", APP_ORIGIN = "https://your-domain.com" }
 - 模板文件为 Markdown。
 - 用户可编辑模板，但编辑结果不会回写模板库，仅对本次报告生效。
 - 每次生成报告会创建“模板快照”，可追溯。
-
-## 外部渲染服务协议
-
-后端会向 `EXPORT_RENDER_URL` 发送 JSON：
-
-```json
-{
-  "format": "pdf",
-  "content": "...",
-  "contentType": "markdown"
-}
-```
-
-支持 `format = pdf | docx`，`contentType = markdown | html`。
 
 ## 目录结构
 

@@ -3,7 +3,7 @@ import { authMiddleware, clearSession, clearSessionCookie, createSession, hashPa
 import type { Env, User } from "./types";
 import { nowIso, putR2Json, putR2Text, readR2Text, safeJsonParse } from "./utils";
 import { generateReport, generateReportStream } from "./ai";
-import { renderExternal } from "./exporters";
+import { renderDocx } from "./exporters";
 
 const app = new Hono<{ Bindings: Env; Variables: { user: User | null } }>();
 
@@ -758,7 +758,7 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
 app.get("/api/reports/:id", requireAuth, async (c) => {
   const reportId = c.req.param("id");
   const report = await c.env.DB.prepare(
-    "SELECT r.id, r.project_id, r.version, r.status, r.md_key, r.json_key, r.created_at, r.error_message, r.prompt_tokens, r.completion_tokens, r.total_tokens FROM reports r JOIN projects p ON r.project_id = p.id WHERE r.id = ? AND p.owner_id = ?"
+    "SELECT r.id, r.project_id, r.version, r.status, r.md_key, r.json_key, r.created_at, r.error_message, r.prompt_tokens, r.completion_tokens, r.total_tokens, p.title AS project_title FROM reports r JOIN projects p ON r.project_id = p.id WHERE r.id = ? AND p.owner_id = ?"
   )
     .bind(reportId, c.get("user")?.id)
     .first();
@@ -822,13 +822,13 @@ app.delete("/api/reports/:id", requireAuth, async (c) => {
 app.post("/api/reports/:id/exports", requireAuth, async (c) => {
   const reportId = c.req.param("id");
   const body = await c.req.json().catch(() => null);
-  const format = body?.format === "pdf" || body?.format === "docx" ? body.format : null;
+  const format = body?.format === "docx" ? body.format : null;
   if (!format) {
     return c.json({ error: "导出格式不支持" }, 400);
   }
 
   const report = await c.env.DB.prepare(
-    "SELECT r.id, r.project_id, r.md_key, r.status FROM reports r JOIN projects p ON r.project_id = p.id WHERE r.id = ? AND p.owner_id = ?"
+    "SELECT r.id, r.project_id, r.md_key, r.status, p.title FROM reports r JOIN projects p ON r.project_id = p.id WHERE r.id = ? AND p.owner_id = ?"
   )
     .bind(reportId, c.get("user")?.id)
     .first();
@@ -855,11 +855,15 @@ app.post("/api/reports/:id/exports", requireAuth, async (c) => {
       throw new Error("报告内容读取失败");
     }
 
-    const rendered = await renderExternal(c.env, markdown, format);
+    const rendered = await renderDocx(markdown, {
+      title: typeof report.title === "string" ? report.title : `Report ${report.version ?? ""}`.trim(),
+      creator: "QRAi",
+      description: `Project ${report.project_id}`
+    });
     const fileKey = `projects/${report.project_id}/exports/${exportId}.${format}`;
     await c.env.BUCKET.put(fileKey, rendered, {
       httpMetadata: {
-        contentType: format === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
       }
     });
 
@@ -880,7 +884,7 @@ app.post("/api/reports/:id/exports", requireAuth, async (c) => {
 app.get("/api/exports/:id/download", requireAuth, async (c) => {
   const exportId = c.req.param("id");
   const exportRow = await c.env.DB.prepare(
-    "SELECT e.id, e.format, e.file_key, r.project_id FROM report_exports e JOIN reports r ON e.report_id = r.id JOIN projects p ON r.project_id = p.id WHERE e.id = ? AND p.owner_id = ?"
+    "SELECT e.id, e.format, e.file_key, r.project_id, r.version, p.title FROM report_exports e JOIN reports r ON e.report_id = r.id JOIN projects p ON r.project_id = p.id WHERE e.id = ? AND p.owner_id = ?"
   )
     .bind(exportId, c.get("user")?.id)
     .first();
@@ -891,9 +895,15 @@ app.get("/api/exports/:id/download", requireAuth, async (c) => {
   if (!object) {
     return c.json({ error: "导出文件缺失" }, 404);
   }
+  const baseTitle = typeof exportRow.title === "string" && exportRow.title.trim()
+    ? exportRow.title.trim()
+    : "report";
+  const safeTitle = baseTitle.replace(/[^a-zA-Z0-9\u4e00-\u9fa5._-]+/g, "-").slice(0, 80);
+  const versionSuffix = Number.isFinite(exportRow.version) ? `-v${exportRow.version}` : "";
+  const filename = `${safeTitle}${versionSuffix}.${exportRow.format}`;
   const headers = new Headers();
   object.writeHttpMetadata(headers);
-  headers.set("content-disposition", `attachment; filename=report-${exportId}.${exportRow.format}`);
+  headers.set("content-disposition", `attachment; filename="${filename}"`);
   return new Response(object.body, { headers });
 });
 
