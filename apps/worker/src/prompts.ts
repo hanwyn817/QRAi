@@ -205,7 +205,7 @@ export function buildMarkdownRenderPrompt(input: {
   scoredItemsJson: string;
   actionsJson: string;
 }): string {
-  return `任务：根据模板与结构化输入，输出完整的 Markdown 风险评估报告。
+  return `任务：根据模板与结构化输入，输出完整的 Markdown 风险评估报告，文档标题为 ${input.title}。
 
 强制规则：
 - 风险识别表、风险评价表、控制措施表均使用“序号”，不要输出 risk_id。

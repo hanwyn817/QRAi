@@ -88,13 +88,15 @@ export default function ReportPreview() {
         report.completion_tokens ?? "-"
       }）`
     : "-";
-  const reportTitle = report?.project_title?.trim() ? `${report.project_title} ` : "";
+  const reportTitleBase = report?.project_title?.trim() ?? "";
+  const titleSuffix = reportTitleBase.endsWith("报告") ? "" : "报告";
+  const fullTitle = reportTitleBase ? `${reportTitleBase}${titleSuffix}` : "报告";
 
   return (
     <div className="report-page">
       <div className="report-header">
         <div>
-          <h2>{report ? `${reportTitle}报告版本 ${report.version}` : "报告版本"}</h2>
+          <h2>{report ? fullTitle : "报告"}</h2>
           <p className="muted">
             状态：{" "}
             <span className={`status-pill status-${report?.status ?? "unknown"}`}>
@@ -121,6 +123,10 @@ export default function ReportPreview() {
           <h3>版本信息</h3>
         </div>
         <div className="report-info-grid">
+          <div className="report-info-item">
+            <strong>版本号</strong>
+            <span>{report?.version ?? "-"}</span>
+          </div>
           <div className="report-info-item">
             <strong>生成时间</strong>
             <span>{formatMinute(report?.created_at)}</span>

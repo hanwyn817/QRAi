@@ -1199,9 +1199,14 @@ app.get("/api/exports/:id/download", requireAuth, async (c) => {
   const safeTitle = baseTitle.replace(/[^a-zA-Z0-9\u4e00-\u9fa5._-]+/g, "-").slice(0, 80);
   const versionSuffix = Number.isFinite(exportRow.version) ? `-v${exportRow.version}` : "";
   const filename = `${safeTitle}${versionSuffix}.${exportRow.format}`;
+  const asciiFallback = `report${versionSuffix}.${exportRow.format}`;
+  const encodedFilename = encodeURIComponent(filename).replace(/%20/g, "%20");
   const headers = new Headers();
   object.writeHttpMetadata(headers);
-  headers.set("content-disposition", `attachment; filename="${filename}"`);
+  headers.set(
+    "content-disposition",
+    `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodedFilename}`
+  );
   return new Response(object.body, { headers });
 });
 
