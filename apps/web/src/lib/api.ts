@@ -94,6 +94,36 @@ export const api = {
   async deleteTemplate(id: string) {
     return request<{ ok: boolean }>(`/api/admin/templates/${id}`, { method: "DELETE" });
   },
+  async listUsers() {
+    return request<{
+      users: Array<{
+        id: string;
+        email: string;
+        role: "admin" | "user";
+        plan: "free" | "pro" | "max";
+        created_at: string;
+        project_count?: number;
+      }>;
+    }>("/api/admin/users");
+  },
+  async createUser(data: { email: string; password: string; plan?: "free" | "pro" | "max" }) {
+    return request<{ id: string; email: string; role: string; plan: "free" | "pro" | "max" }>(
+      "/api/admin/users",
+      {
+        method: "POST",
+        body: JSON.stringify(data)
+      }
+    );
+  },
+  async updateUserPlan(id: string, plan: "free" | "pro" | "max") {
+    return request<{ ok: boolean }>(`/api/admin/users/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ plan })
+    });
+  },
+  async deleteUser(id: string) {
+    return request<{ ok: boolean }>(`/api/admin/users/${id}`, { method: "DELETE" });
+  },
   async listProjects() {
     return request<{
       projects: Array<{
@@ -202,6 +232,11 @@ export const api = {
       }>;
       defaults: { text: string | null; embedding: string | null; rerank: string | null };
     }>("/api/models");
+  },
+  async listModelTiers() {
+    return request<{
+      tiers: { free: string[]; pro: string[]; max: string[] };
+    }>("/api/models/tiers");
   },
   async listAdminModels() {
     return request<{

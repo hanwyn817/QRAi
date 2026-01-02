@@ -266,3 +266,28 @@ export async function setModelAccess(env: Env, modelId: string, plans: PlanTier[
       .run();
   }
 }
+
+export async function listModelNamesByPlan(env: Env): Promise<Record<PlanTier, string[]>> {
+  const rows = await env.DB.prepare(
+    "SELECT m.name as name, ma.plan as plan FROM models m JOIN model_access ma ON ma.model_id = m.id WHERE m.is_active = 1 ORDER BY m.updated_at DESC"
+  ).all();
+  const result: Record<PlanTier, string[]> = { free: [], pro: [], max: [] };
+  const seen = {
+    free: new Set<string>(),
+    pro: new Set<string>(),
+    max: new Set<string>()
+  };
+  (rows.results ?? []).forEach((row) => {
+    const plan = row.plan as PlanTier;
+    const modelName = (row.name as string) ?? "";
+    if (!modelName || !seen[plan]) {
+      return;
+    }
+    if (seen[plan].has(modelName)) {
+      return;
+    }
+    seen[plan].add(modelName);
+    result[plan].push(modelName);
+  });
+  return result;
+}

@@ -4,7 +4,7 @@ import type { Env, ModelCategory, ModelRuntimeConfig, User } from "./types";
 import { nowIso, putR2Json, putR2Text, readR2Text, safeJsonParse } from "./utils";
 import { generateReport, generateReportStream } from "./ai";
 import { renderDocx } from "./exporters";
-import { ensureDefaultModel, fetchDefaultModelForPlan, fetchModelByIdForPlan, listAdminModels, listPublicModelsForPlan, normalizeModelCategory, normalizePlanTier, sanitizeBaseUrl, setDefaultModel, setModelAccess } from "./models";
+import { ensureDefaultModel, fetchDefaultModelForPlan, fetchModelByIdForPlan, listAdminModels, listModelNamesByPlan, listPublicModelsForPlan, normalizeModelCategory, normalizePlanTier, sanitizeBaseUrl, setDefaultModel, setModelAccess } from "./models";
 
 const app = new Hono<{ Bindings: Env; Variables: { user: User | null } }>();
 const ALLOWED_EVAL_TOOLS = new Set(["FMEA"]);
@@ -202,6 +202,11 @@ app.get("/api/models", requireAuth, async (c) => {
   const plan = (user?.plan ?? "free") as "free" | "pro" | "max";
   const result = await listPublicModelsForPlan(c.env, plan);
   return c.json(result);
+});
+
+app.get("/api/models/tiers", requireAuth, async (c) => {
+  const tiers = await listModelNamesByPlan(c.env);
+  return c.json({ tiers });
 });
 
 app.get("/api/admin/models", requireAdmin, async (c) => {
@@ -479,6 +484,75 @@ app.post("/api/admin/templates/:id/duplicate", requireAdmin, async (c) => {
     .run();
 
   return c.json({ id, name: duplicateName });
+});
+
+app.get("/api/admin/users", requireAdmin, async (c) => {
+  const rows = await c.env.DB.prepare(
+    "SELECT u.id, u.email, u.role, u.plan, u.created_at, " +
+      "(SELECT COUNT(1) FROM projects p WHERE p.owner_id = u.id) as project_count " +
+      "FROM users u ORDER BY u.created_at DESC"
+  ).all();
+  return c.json({ users: rows.results ?? [] });
+});
+
+app.post("/api/admin/users", requireAdmin, async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const email = typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
+  const password = typeof body?.password === "string" ? body.password : "";
+  const plan = normalizePlanTier(body?.plan) ?? "free";
+
+  if (!email || !password || password.length < 6) {
+    return c.json({ error: "邮箱或密码不合法" }, 400);
+  }
+
+  const existing = await c.env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first();
+  if (existing) {
+    return c.json({ error: "邮箱已注册" }, 409);
+  }
+
+  const { hash, salt } = await hashPassword(password);
+  const userId = crypto.randomUUID();
+  await c.env.DB.prepare(
+    "INSERT INTO users (id, email, password_hash, password_salt, role, plan, created_at) VALUES (?, ?, ?, ?, 'user', ?, ?)"
+  )
+    .bind(userId, email, hash, salt, plan, nowIso())
+    .run();
+
+  return c.json({ id: userId, email, role: "user", plan });
+});
+
+app.patch("/api/admin/users/:id", requireAdmin, async (c) => {
+  const userId = c.req.param("id");
+  const body = await c.req.json().catch(() => null);
+  const plan = normalizePlanTier(body?.plan);
+  if (!plan) {
+    return c.json({ error: "用户等级不合法" }, 400);
+  }
+  const row = await c.env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(userId).first();
+  if (!row) {
+    return c.json({ error: "用户不存在" }, 404);
+  }
+  await c.env.DB.prepare("UPDATE users SET plan = ? WHERE id = ?").bind(plan, userId).run();
+  return c.json({ ok: true });
+});
+
+app.delete("/api/admin/users/:id", requireAdmin, async (c) => {
+  const userId = c.req.param("id");
+  const row = await c.env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(userId).first();
+  if (!row) {
+    return c.json({ error: "用户不存在" }, 404);
+  }
+  const projectRow = await c.env.DB.prepare(
+    "SELECT COUNT(1) as count FROM projects WHERE owner_id = ?"
+  )
+    .bind(userId)
+    .first();
+  if ((projectRow?.count as number | null) && (projectRow?.count as number) > 0) {
+    return c.json({ error: "用户仍有关联项目，请先删除项目" }, 400);
+  }
+  await c.env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
+  await c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(userId).run();
+  return c.json({ ok: true });
 });
 
 app.post("/api/projects", requireAuth, async (c) => {
