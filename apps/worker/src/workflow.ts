@@ -12,7 +12,7 @@ import type {
 import { DEFAULT_TEMPLATE } from "./prompts";
 import type { ModelRuntimeConfig } from "./types";
 
-const FIVE_FACTOR_DIMENSIONS = ["人员", "设备与设施", "物料", "法规/程序", "环境"];
+const FIVE_FACTOR_DIMENSIONS = ["人员", "设备与设施", "物料", "法规与程序", "环境"];
 const ACTION_TYPES = [
   "SOP/规程",
   "培训与资质",

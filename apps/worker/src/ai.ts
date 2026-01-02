@@ -23,7 +23,7 @@ import type {
 import { buildWorkflowContext, mergeScoring, validateActionsOutput, validateRiskIdentification } from "./workflow";
 
 const RISK_ID_PLACEHOLDER = "00000000-0000-0000-0000-000000000000";
-const FIVE_FACTOR_DIMENSIONS = ["人员", "设备与设施", "物料", "法规/程序", "环境"];
+const FIVE_FACTOR_DIMENSIONS = ["人员", "设备与设施", "物料", "法规与程序", "环境"];
 const ACTION_TYPES = [
   "SOP/规程",
   "培训与资质",
@@ -52,7 +52,7 @@ function normalizeFiveFactorDimension(value: string): string | null {
     return "物料";
   }
   if (normalized.includes("法规") || normalized.includes("程序") || normalized.includes("规程")) {
-    return "法规/程序";
+    return "法规与程序";
   }
   return FIVE_FACTOR_DIMENSIONS.includes(normalized) ? normalized : null;
 }
@@ -578,7 +578,7 @@ function parseFmeaScoring(raw: unknown, riskIds: string[]): FmeaScoringOutput {
   return { rows };
 }
 
-function parseActions(raw: unknown, requiredIds: string[]): ActionOutput {
+function parseActions(raw: unknown, requiredIds: string[], today: string): ActionOutput {
   if (!Array.isArray(raw)) {
     throw new Error("控制措施输出不是数组");
   }
@@ -616,12 +616,16 @@ function parseActions(raw: unknown, requiredIds: string[]): ActionOutput {
       if (!/^\d{4}-\d{2}-\d{2}$|^TBD$/.test(actionRecord.planned_date as string)) {
         throw new Error(`措施#${index + 1}.${actionIndex + 1} planned_date 格式非法`);
       }
+      let plannedDate = actionRecord.planned_date as string;
+      if (plannedDate !== "TBD" && plannedDate < today) {
+        plannedDate = "TBD";
+      }
       return {
         type: normalizedType as ActionOutput[number]["actions"][number]["type"],
         action_text: actionRecord.action_text as string,
         owner_role: actionRecord.owner_role as string,
         owner_dept: actionRecord.owner_dept as string,
-        planned_date: actionRecord.planned_date as string
+        planned_date: plannedDate
       };
     });
     return { risk_id: record.risk_id as string, actions };
@@ -654,6 +658,13 @@ function ensureActionsForRisks(actions: ActionOutput, scoredItems: ScoredRiskIte
     });
   }
   return completed;
+}
+
+function formatLocalDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function ensureNotAborted(signal?: AbortSignal) {
@@ -777,6 +788,7 @@ async function runWorkflow(
   const needActions = scoredItems.filter((item) => item.need_actions);
   let actions: ActionOutput = [];
   if (needActions.length > 0) {
+    const today = formatLocalDate(new Date());
     const actionPrompt = buildActionsPrompt({
       scoredItemsJson: JSON.stringify({
         items: needActions.map((item) => ({
@@ -795,7 +807,8 @@ async function runWorkflow(
       scope: context.scope,
       background: context.background,
       objectiveBias: context.objectiveBias,
-      evidenceBlocks: context.evidenceBlocks
+      evidenceBlocks: context.evidenceBlocks,
+      today
     });
     const actionResponse = handlers?.onLlmDelta
       ? await callJsonLlmStream<ActionOutput>(
@@ -808,7 +821,7 @@ async function runWorkflow(
       : await callJsonLlm<ActionOutput>(models.llm, actionPrompt, signal);
     usage = accumulateUsage(usage, actionResponse.usage);
     handlers?.onUsage?.(usage ?? {});
-    actions = parseActions(actionResponse.data, needActions.map((item) => item.risk_id));
+    actions = parseActions(actionResponse.data, needActions.map((item) => item.risk_id), today);
     actions = ensureActionsForRisks(actions, scoredItems);
     validateActionsOutput(actions, scoredItems);
   }
