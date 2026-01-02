@@ -39,7 +39,7 @@ function Layout({ children }: { children: React.ReactNode }) {
       <header className="app-header">
         <div className="brand">
           <span className="brand-mark">QRAi</span>
-          <span className="brand-tag">质量风险评估工作台</span>
+          <span className="brand-tag">AI质量风险评估工作台</span>
         </div>
         <nav className="app-nav">
           <Link to="/">首页</Link>

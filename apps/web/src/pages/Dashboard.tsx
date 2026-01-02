@@ -94,7 +94,7 @@ export default function Dashboard() {
         <div>
           <h2>AI 驱动的质量风险评估平台</h2>
           <p className="muted">
-            基于专业 LLM 生成合规报告，覆盖 ICH 与 GMP 规范要求，帮助质量团队快速完成风险评估。
+            基于专业大语言模型（LLM）生成合规报告，覆盖 ICH 与 GMP 规范要求，帮助质量团队快速完成风险评估。
           </p>
         </div>
       </section>
