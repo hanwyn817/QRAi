@@ -207,6 +207,29 @@ button.danger {
   align-items: center;
 }
 
+.plan-badge {
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.plan-free {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.plan-pro {
+  background: #1d4ed8;
+  color: #e0edff;
+}
+
+.plan-max {
+  background: #f59e0b;
+  color: #3b2f0b;
+}
+
 .app-main {
   padding: 2rem 3rem 3.5rem;
   display: grid;

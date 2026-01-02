@@ -33,6 +33,7 @@ function RequireAdmin({ children }: { children: React.ReactNode }) {
 
 function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
+  const plan = user?.plan ?? "free";
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -52,8 +53,18 @@ function Layout({ children }: { children: React.ReactNode }) {
           ) : null}
         </nav>
         <div className="app-user">
-          <span className="user-email">{user?.email}</span>
-          <button className="ghost" onClick={logout}>退出</button>
+          {user ? (
+            <>
+              <span className={`plan-badge plan-${plan}`}>{plan.toUpperCase()}</span>
+              <span className="user-email">{user.email}</span>
+              <button className="ghost" onClick={logout}>退出</button>
+            </>
+          ) : (
+            <>
+              <Link className="ghost" to="/login">登录</Link>
+              <Link className="ghost" to="/register">注册</Link>
+            </>
+          )}
         </div>
       </header>
       <main className="app-main">{children}</main>
@@ -70,11 +81,9 @@ export default function App() {
         <Route
           path="/"
           element={
-            <RequireAuth>
-              <Layout>
-                <Dashboard />
-              </Layout>
-            </RequireAuth>
+            <Layout>
+              <Dashboard />
+            </Layout>
           }
         />
         <Route
@@ -100,11 +109,9 @@ export default function App() {
         <Route
           path="/pricing"
           element={
-            <RequireAuth>
-              <Layout>
-                <Pricing />
-              </Layout>
-            </RequireAuth>
+            <Layout>
+              <Pricing />
+            </Layout>
           }
         />
         <Route

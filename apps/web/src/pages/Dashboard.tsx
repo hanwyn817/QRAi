@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 
 function formatMinute(value?: string | null) {
   if (!value) {
@@ -33,8 +34,12 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
 
   const loadProjects = async () => {
+    if (!user) {
+      return;
+    }
     const result = await api.listProjects();
     if (result.data) {
       setProjects(result.data.projects);
@@ -42,10 +47,17 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    if (authLoading) {
+      return;
+    }
     loadProjects();
-  }, []);
+  }, [authLoading, user]);
 
   const handleCreate = async () => {
+    if (!user) {
+      navigate("/login", { state: { from: "/" } });
+      return;
+    }
     if (!title.trim()) {
       setError("请填写项目标题");
       return;
@@ -80,17 +92,28 @@ export default function Dashboard() {
     <div className="dashboard">
       <section className="hero-card">
         <div>
+          <h2>AI 驱动的质量风险评估平台</h2>
+          <p className="muted">
+            基于专业 LLM 生成合规报告，覆盖 ICH 与 GMP 规范要求，帮助质量团队快速完成风险评估。
+          </p>
+        </div>
+      </section>
+      <section className="hero-card">
+        <div>
           <h2>新建风险评估项目</h2>
-          <p className="muted">输入标题后即可进入项目流程，逐步补齐评估信息。</p>
+          <p className="muted">
+            {user ? "输入标题后即可进入项目流程，逐步补齐评估信息。" : "登录后即可创建并管理评估项目。"}
+          </p>
         </div>
         <div className="hero-actions">
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="例如：固体制剂车间洁净区风险评估"
+            disabled={!user}
           />
           <button onClick={handleCreate} disabled={loading}>
-            {loading ? "创建中..." : "创建报告"}
+            {loading ? "创建中..." : user ? "创建报告" : "登录后创建"}
           </button>
         </div>
         {error ? <div className="error">{error}</div> : null}
@@ -101,7 +124,9 @@ export default function Dashboard() {
           <h3>我的项目</h3>
           <span className="muted">共 {projects.length} 个</span>
         </div>
-        {projects.length === 0 ? (
+        {!user ? (
+          <div className="empty">登录后可查看项目列表。</div>
+        ) : projects.length === 0 ? (
           <div className="empty">暂无项目，请先创建。</div>
         ) : (
           <div className="project-grid">

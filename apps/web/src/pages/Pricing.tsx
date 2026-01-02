@@ -42,10 +42,11 @@ export default function Pricing() {
     const proExclusive = pro.filter((name) => !freeSet.has(name));
     const maxExclusive = max.filter((name) => !proSet.has(name));
 
-    const formatList = (items: string[]) => (items.length > 0 ? items : ["暂无"]);
-    const freeLines = ["基础模型", ...formatList(free)];
-    const proLines = ["所有基础模型", "Pro专属模型：", ...formatList(proExclusive)];
-    const maxLines = ["所有Pro模型", "Max专属模型：", ...formatList(maxExclusive)];
+    const formatList = (items: string[], emptyLabel: string) =>
+      items.length > 0 ? items : [emptyLabel];
+    const freeLines = ["基础模型", ...formatList(free, "暂无可用模型")];
+    const proLines = ["所有基础模型", "Pro专属模型：", ...formatList(proExclusive, "暂无专属模型")];
+    const maxLines = ["所有Pro模型", "Max专属模型：", ...formatList(maxExclusive, "暂无专属模型")];
 
     return { freeLines, proLines, maxLines };
   }, [tierModels]);
@@ -71,7 +72,9 @@ export default function Pricing() {
                 <li key={feature}>{feature}</li>
               ))}
             </ul>
-            <button className="pricing-cta">订阅 {tier.name}</button>
+            <button className="pricing-cta" disabled>
+              即将上线
+            </button>
           </section>
         ))}
       </div>
