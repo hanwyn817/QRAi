@@ -47,6 +47,72 @@ const isValidHttpUrl = (value: string) => {
   return /^https?:\/\//i.test(value);
 };
 
+const deleteProjectResources = async (env: Env, projectId: string) => {
+  const fileRows = await env.DB.prepare(
+    "SELECT file_key, text_key FROM project_files WHERE project_id = ?"
+  )
+    .bind(projectId)
+    .all();
+  const reportRows = await env.DB.prepare(
+    "SELECT id, md_key, json_key, template_snapshot_key FROM reports WHERE project_id = ?"
+  )
+    .bind(projectId)
+    .all();
+  const exportRows = await env.DB.prepare(
+    "SELECT re.file_key FROM report_exports re JOIN reports r ON re.report_id = r.id WHERE r.project_id = ?"
+  )
+    .bind(projectId)
+    .all();
+
+  const keysToDelete: string[] = [];
+  for (const row of fileRows.results ?? []) {
+    if (row.file_key) {
+      keysToDelete.push(row.file_key as string);
+    }
+    if (row.text_key) {
+      keysToDelete.push(row.text_key as string);
+    }
+  }
+  for (const row of reportRows.results ?? []) {
+    if (row.md_key) {
+      keysToDelete.push(row.md_key as string);
+    }
+    if (row.json_key) {
+      keysToDelete.push(row.json_key as string);
+    }
+    if (row.template_snapshot_key) {
+      keysToDelete.push(row.template_snapshot_key as string);
+    }
+  }
+  for (const row of exportRows.results ?? []) {
+    if (row.file_key) {
+      keysToDelete.push(row.file_key as string);
+    }
+  }
+
+  for (const key of keysToDelete) {
+    await env.BUCKET.delete(key);
+  }
+
+  await env.DB.prepare(
+    "DELETE FROM report_exports WHERE report_id IN (SELECT id FROM reports WHERE project_id = ?)"
+  )
+    .bind(projectId)
+    .run();
+  await env.DB.prepare("DELETE FROM reports WHERE project_id = ?")
+    .bind(projectId)
+    .run();
+  await env.DB.prepare("DELETE FROM project_files WHERE project_id = ?")
+    .bind(projectId)
+    .run();
+  await env.DB.prepare("DELETE FROM project_inputs WHERE project_id = ?")
+    .bind(projectId)
+    .run();
+  await env.DB.prepare("DELETE FROM projects WHERE id = ?")
+    .bind(projectId)
+    .run();
+};
+
 const resolveTextModel = async (
   env: Env,
   requestedId: string | null,
@@ -542,14 +608,16 @@ app.delete("/api/admin/users/:id", requireAdmin, async (c) => {
   if (!row) {
     return c.json({ error: "用户不存在" }, 404);
   }
-  const projectRow = await c.env.DB.prepare(
-    "SELECT COUNT(1) as count FROM projects WHERE owner_id = ?"
-  )
+
+  const projects = await c.env.DB.prepare("SELECT id FROM projects WHERE owner_id = ?")
     .bind(userId)
-    .first();
-  if ((projectRow?.count as number | null) && (projectRow?.count as number) > 0) {
-    return c.json({ error: "用户仍有关联项目，请先删除项目" }, 400);
+    .all();
+  for (const project of projects.results ?? []) {
+    if (project.id) {
+      await deleteProjectResources(c.env, project.id as string);
+    }
   }
+
   await c.env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
   await c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(userId).run();
   return c.json({ ok: true });
@@ -628,72 +696,8 @@ app.delete("/api/projects/:id", requireAuth, async (c) => {
   if (!project) {
     return c.json({ error: "项目不存在" }, 404);
   }
-  const user = c.get("user");
-  const plan = (user?.plan ?? "free") as "free" | "pro" | "max";
 
-  const fileRows = await c.env.DB.prepare(
-    "SELECT file_key, text_key FROM project_files WHERE project_id = ?"
-  )
-    .bind(projectId)
-    .all();
-  const reportRows = await c.env.DB.prepare(
-    "SELECT id, md_key, json_key, template_snapshot_key FROM reports WHERE project_id = ?"
-  )
-    .bind(projectId)
-    .all();
-  const exportRows = await c.env.DB.prepare(
-    "SELECT re.file_key FROM report_exports re JOIN reports r ON re.report_id = r.id WHERE r.project_id = ?"
-  )
-    .bind(projectId)
-    .all();
-
-  const keysToDelete: string[] = [];
-  for (const row of fileRows.results ?? []) {
-    if (row.file_key) {
-      keysToDelete.push(row.file_key as string);
-    }
-    if (row.text_key) {
-      keysToDelete.push(row.text_key as string);
-    }
-  }
-  for (const row of reportRows.results ?? []) {
-    if (row.md_key) {
-      keysToDelete.push(row.md_key as string);
-    }
-    if (row.json_key) {
-      keysToDelete.push(row.json_key as string);
-    }
-    if (row.template_snapshot_key) {
-      keysToDelete.push(row.template_snapshot_key as string);
-    }
-  }
-  for (const row of exportRows.results ?? []) {
-    if (row.file_key) {
-      keysToDelete.push(row.file_key as string);
-    }
-  }
-
-  for (const key of keysToDelete) {
-    await c.env.BUCKET.delete(key);
-  }
-
-  await c.env.DB.prepare(
-    "DELETE FROM report_exports WHERE report_id IN (SELECT id FROM reports WHERE project_id = ?)"
-  )
-    .bind(projectId)
-    .run();
-  await c.env.DB.prepare("DELETE FROM reports WHERE project_id = ?")
-    .bind(projectId)
-    .run();
-  await c.env.DB.prepare("DELETE FROM project_files WHERE project_id = ?")
-    .bind(projectId)
-    .run();
-  await c.env.DB.prepare("DELETE FROM project_inputs WHERE project_id = ?")
-    .bind(projectId)
-    .run();
-  await c.env.DB.prepare("DELETE FROM projects WHERE id = ?")
-    .bind(projectId)
-    .run();
+  await deleteProjectResources(c.env, projectId);
 
   return c.json({ ok: true });
 });
