@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { authMiddleware, clearSession, clearSessionCookie, createSession, hashPassword, requireAdmin, requireAuth, setSessionCookie, verifyPassword } from "./auth";
-import type { Env, ModelCategory, ModelRuntimeConfig, User } from "./types";
+import type { Env, ModelCategory, ModelRuntimeConfig, PlanTier, User } from "./types";
 import { nowIso, putR2Json, putR2Text, readR2Text, safeJsonParse } from "./utils";
 import { generateReport, generateReportStream } from "./ai";
 import { renderDocx } from "./exporters";
@@ -222,13 +222,13 @@ app.post("/api/admin/models", requireAdmin, async (c) => {
   const apiKey = typeof body?.apiKey === "string" ? body.apiKey.trim() : "";
   const category = normalizeModelCategory(body?.category);
   const isDefault = body?.isDefault === true;
-  const allowedPlansRaw = Array.isArray(body?.allowedPlans) ? body.allowedPlans : null;
-  const allowedPlans = allowedPlansRaw
+  const allowedPlansRaw = Array.isArray(body?.allowedPlans) ? (body.allowedPlans as unknown[]) : null;
+  const allowedPlans: PlanTier[] = allowedPlansRaw
     ? Array.from(
         new Set(
           allowedPlansRaw
             .map((plan: unknown) => normalizePlanTier(plan))
-            .filter((plan): plan is "free" | "pro" | "max" => Boolean(plan))
+            .filter((plan): plan is PlanTier => Boolean(plan))
         )
       )
     : ["free"];
@@ -278,13 +278,13 @@ app.patch("/api/admin/models/:id", requireAdmin, async (c) => {
   const apiKeyRaw = typeof body?.apiKey === "string" ? body.apiKey.trim() : null;
   const category = body?.category ? normalizeModelCategory(body.category) : null;
   const isDefault = typeof body?.isDefault === "boolean" ? body.isDefault : null;
-  const allowedPlansRaw = Array.isArray(body?.allowedPlans) ? body.allowedPlans : null;
-  const allowedPlans = allowedPlansRaw
+  const allowedPlansRaw = Array.isArray(body?.allowedPlans) ? (body.allowedPlans as unknown[]) : null;
+  const allowedPlans: PlanTier[] | null = allowedPlansRaw
     ? Array.from(
         new Set(
           allowedPlansRaw
             .map((plan: unknown) => normalizePlanTier(plan))
-            .filter((plan): plan is "free" | "pro" | "max" => Boolean(plan))
+            .filter((plan): plan is PlanTier => Boolean(plan))
         )
       )
     : null;
@@ -707,6 +707,9 @@ app.patch("/api/projects/:id/inputs", requireAuth, async (c) => {
     return c.json({ error: "项目不存在" }, 404);
   }
 
+  const user = c.get("user");
+  const plan = (user?.plan ?? "free") as "free" | "pro" | "max";
+
   const body = await c.req.json().catch(() => null);
   const scope = typeof body?.scope === "string" ? body.scope.trim() : null;
   const background = typeof body?.background === "string" ? body.background.trim() : null;
@@ -999,6 +1002,8 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
   const body = await c.req.json().catch(() => null);
   let templateContent = typeof body?.templateContent === "string" ? body.templateContent : null;
   const requestedTextModelId = typeof body?.textModelId === "string" ? body.textModelId.trim() : null;
+  const user = c.get("user");
+  const plan = (user?.plan ?? "free") as "free" | "pro" | "max";
 
   const inputs = await c.env.DB.prepare(
     "SELECT scope, background, objective, risk_method, eval_tool, process_steps, template_id, text_model_id FROM project_inputs WHERE project_id = ?"
