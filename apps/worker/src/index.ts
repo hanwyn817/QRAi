@@ -11,11 +11,13 @@ const ALLOWED_EVAL_TOOLS = new Set(["FMEA"]);
 const normalizeEvalTool = (value: string | null | undefined) => {
   return value && ALLOWED_EVAL_TOOLS.has(value) ? value : "FMEA";
 };
-const normalizeProcessSteps = (raw: unknown) => {
+const normalizeProcessSteps = (
+  raw: unknown
+): Array<{ step_id: string; step_name: string }> | null => {
   if (!Array.isArray(raw)) {
     return null;
   }
-  return raw
+  const items = raw
     .map((item, index) => {
       if (!item || typeof item !== "object") {
         return null;
@@ -28,11 +30,12 @@ const normalizeProcessSteps = (raw: unknown) => {
       const stepId = typeof record.step_id === "string" ? record.step_id.trim() : "";
       return { step_id: stepId || `step_${index + 1}`, step_name: stepName };
     })
-    .filter((item) => Boolean(item));
+    .filter((item): item is { step_id: string; step_name: string } => Boolean(item));
+  return items;
 };
 const parseProcessStepsFromDb = (value: unknown) => {
   if (typeof value !== "string" || !value.trim()) {
-    return null;
+    return undefined;
   }
   const parsed = safeJsonParse(value);
   const steps = normalizeProcessSteps(parsed);

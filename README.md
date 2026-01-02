@@ -154,3 +154,8 @@ vars = { APP_ENV = "production", APP_ORIGIN = "https://your-domain.com" }
 
 - 联网检索：`apps/worker/src/search.ts` 中实现 `SearchProvider`。
 - 向量检索/RAG：可接入 Cloudflare Vectorize 或其他服务。
+
+## TODO
+
+- 增加模型管理
+- 增加用户用量管理
