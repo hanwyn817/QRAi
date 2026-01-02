@@ -14,6 +14,7 @@ type ReportInfo = {
   prompt_tokens: number | null;
   completion_tokens: number | null;
   total_tokens: number | null;
+  model_name?: string | null;
 };
 
 function formatMinute(value?: string | null) {
@@ -123,6 +124,10 @@ export default function ReportPreview() {
           <div className="report-info-item">
             <strong>生成时间</strong>
             <span>{formatMinute(report?.created_at)}</span>
+          </div>
+          <div className="report-info-item">
+            <strong>模型</strong>
+            <span>{report?.model_name ?? "-"}</span>
           </div>
           <div className="report-info-item">
             <strong>Token 消耗</strong>

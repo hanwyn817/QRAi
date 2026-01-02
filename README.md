@@ -25,9 +25,6 @@ npm install
 在 `apps/worker/` 下创建 `.dev.vars`：
 
 ```bash
-OPENAI_API_KEY=你的Key
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4o-mini
 APP_ENV=local
 APP_ORIGIN=http://localhost:5173
 ADMIN_BOOTSTRAP_KEY=本地管理员初始化密钥
@@ -66,10 +63,14 @@ VITE_API_BASE=http://localhost:8787
 npm run dev:web
 ```
 
+### 7) 初始化模型
+
+使用管理员账号登录后，在「模型管理」中新增 OpenAI 兼容模型，并为每个类别设置默认模型。
+
 ## 生产部署（Cloudflare）
 
 1. 创建 D1 数据库与 R2 Bucket，并将 ID/名称写入 `apps/worker/wrangler.toml`。
-2. 设置 Workers 环境变量（如 `OPENAI_API_KEY` 等）。
+2. 设置 Workers 环境变量（如 `APP_ORIGIN`、`ADMIN_BOOTSTRAP_KEY` 等）。
 3. 部署 Workers：
 
 ```bash
@@ -108,12 +109,12 @@ cp apps/worker/.env.example apps/worker/.dev.vars
 - 需要更换 Worker 入口文件或名称。
 - 新增/调整 D1、R2、KV、Vectorize 等绑定。
 - 需要增加路由、环境分组（`[env.production]` / `[env.staging]`）。
-- 修改默认变量（如 `APP_ORIGIN`、`OPENAI_MODEL` 的默认值）。
+- 修改默认变量（如 `APP_ORIGIN` 的默认值）。
 
 如何修改（常见操作）：
 - 绑定 D1/R2：将 `database_id` 与 `bucket_name` 改成你真实的资源 ID/名称。
 - 添加多环境配置：使用 `[env.production]` 覆盖生产变量，避免与本地混用。
-- **不要**在 `wrangler.toml` 内写入敏感信息（如 `OPENAI_API_KEY`）；用 `wrangler secret put`。
+- **不要**在 `wrangler.toml` 内写入敏感信息；模型 API Key 请通过管理后台维护。
 
 示例（生产环境绑定）：
 ```toml
@@ -157,5 +158,4 @@ vars = { APP_ENV = "production", APP_ORIGIN = "https://your-domain.com" }
 
 ## TODO
 
-- 增加模型管理
 - 增加用户用量管理

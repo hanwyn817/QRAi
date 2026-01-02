@@ -1,9 +1,6 @@
 export type Env = {
   DB: D1Database;
   BUCKET: R2Bucket;
-  OPENAI_API_KEY: string;
-  OPENAI_BASE_URL: string;
-  OPENAI_MODEL: string;
   APP_ENV: string;
   APP_ORIGIN: string;
   EXPORT_RENDER_URL?: string;
@@ -11,9 +8,17 @@ export type Env = {
   EXPORT_RENDER_MODE?: string;
   ADMIN_BOOTSTRAP_KEY?: string;
   REPORT_TIMEZONE?: string;
-  DASHSCOPE_API_KEY?: string;
-  DASHSCOPE_BASE_URL?: string;
-  DASHSCOPE_EMBEDDING_MODEL?: string;
+};
+
+export type ModelCategory = "text" | "embedding" | "rerank";
+
+export type ModelRuntimeConfig = {
+  id: string;
+  name: string;
+  category: ModelCategory;
+  model: string;
+  baseUrl: string;
+  apiKey: string;
 };
 
 export type User = {

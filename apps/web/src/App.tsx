@@ -6,6 +6,7 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import ProjectDetail from "./pages/ProjectDetail";
 import AdminTemplates from "./pages/AdminTemplates";
+import AdminModels from "./pages/AdminModels";
 import ReportPreview from "./pages/ReportPreview";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -39,7 +40,12 @@ function Layout({ children }: { children: React.ReactNode }) {
         </div>
         <nav className="app-nav">
           <Link to="/">首页</Link>
-          {user?.role === "admin" ? <Link to="/admin/templates">模板管理</Link> : null}
+          {user?.role === "admin" ? (
+            <>
+              <Link to="/admin/templates">模板管理</Link>
+              <Link to="/admin/models">模型管理</Link>
+            </>
+          ) : null}
         </nav>
         <div className="app-user">
           <span className="user-email">{user?.email}</span>
@@ -94,6 +100,18 @@ export default function App() {
               <RequireAdmin>
                 <Layout>
                   <AdminTemplates />
+                </Layout>
+              </RequireAdmin>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin/models"
+          element={
+            <RequireAuth>
+              <RequireAdmin>
+                <Layout>
+                  <AdminModels />
                 </Layout>
               </RequireAdmin>
             </RequireAuth>

@@ -112,6 +112,7 @@ export const api = {
         eval_tool: string | null;
         process_steps: Array<{ step_id: string; step_name: string }> | null;
         template_id: string | null;
+        text_model_id: string | null;
       };
       files: Array<{ id: string; type: string; filename: string; status: string; created_at: string }>;
       reports: Array<{
@@ -122,6 +123,7 @@ export const api = {
         prompt_tokens: number | null;
         completion_tokens: number | null;
         total_tokens: number | null;
+        model_name?: string | null;
       }>;
     }>(`/api/projects/${id}`);
   },
@@ -133,6 +135,7 @@ export const api = {
     evalTool?: string;
     processSteps?: Array<{ step_id: string; step_name: string }>;
     templateId?: string;
+    textModelId?: string;
   }) {
     return request<{ ok: boolean }>(`/api/projects/${id}/inputs`, {
       method: "PATCH",
@@ -170,5 +173,64 @@ export const api = {
   async deleteReport(id: string, force = false) {
     const query = force ? "?force=1" : "";
     return request<{ ok: boolean }>(`/api/reports/${id}${query}`, { method: "DELETE" });
+  },
+  async listModels() {
+    return request<{
+      models: Array<{
+        id: string;
+        name: string;
+        category: "text" | "embedding" | "rerank";
+        model_name: string;
+        is_default: boolean;
+      }>;
+      defaults: { text: string | null; embedding: string | null; rerank: string | null };
+    }>("/api/models");
+  },
+  async listAdminModels() {
+    return request<{
+      models: Array<{
+        id: string;
+        name: string;
+        category: "text" | "embedding" | "rerank";
+        model_name: string;
+        base_url: string;
+        api_key_masked: string;
+        is_default: boolean;
+        is_active: boolean;
+        updated_at: string;
+      }>;
+    }>("/api/admin/models");
+  },
+  async createModel(data: {
+    name: string;
+    category: "text" | "embedding" | "rerank";
+    modelName: string;
+    baseUrl: string;
+    apiKey: string;
+    isDefault?: boolean;
+  }) {
+    return request<{ id: string }>("/api/admin/models", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+  },
+  async updateModel(
+    id: string,
+    data: {
+      name?: string;
+      category?: "text" | "embedding" | "rerank";
+      modelName?: string;
+      baseUrl?: string;
+      apiKey?: string;
+      isDefault?: boolean;
+    }
+  ) {
+    return request<{ ok: boolean }>(`/api/admin/models/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data)
+    });
+  },
+  async deleteModel(id: string) {
+    return request<{ ok: boolean }>(`/api/admin/models/${id}`, { method: "DELETE" });
   }
 };

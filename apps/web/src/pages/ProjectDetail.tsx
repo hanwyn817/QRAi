@@ -73,9 +73,18 @@ export default function ProjectDetail() {
     riskMethod: "五因素法",
     evalTool: "FMEA",
     processStepsText: "",
-    templateId: ""
+    templateId: "",
+    textModelId: ""
   });
   const [templates, setTemplates] = useState<Array<{ id: string; name: string; description: string | null }>>([]);
+  const [models, setModels] = useState<
+    Array<{ id: string; name: string; category: "text" | "embedding" | "rerank"; model_name: string; is_default: boolean }>
+  >([]);
+  const [modelDefaults, setModelDefaults] = useState<{ text: string | null; embedding: string | null; rerank: string | null }>({
+    text: null,
+    embedding: null,
+    rerank: null
+  });
   const [templateDraft, setTemplateDraft] = useState("");
   const [files, setFiles] = useState<Array<{ id: string; type: string; filename: string; status: string }>>([]);
   const [reports, setReports] = useState<
@@ -87,6 +96,7 @@ export default function ProjectDetail() {
       prompt_tokens: number | null;
       completion_tokens: number | null;
       total_tokens: number | null;
+      model_name?: string | null;
     }>
   >([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -166,6 +176,20 @@ export default function ProjectDetail() {
   const selectedTemplate = useMemo(() => {
     return templates.find((template) => template.id === inputs.templateId) ?? null;
   }, [templates, inputs.templateId]);
+  const textModels = useMemo(() => models.filter((model) => model.category === "text"), [models]);
+  const resolvedTextModelId = useMemo(() => {
+    if (inputs.textModelId && textModels.some((model) => model.id === inputs.textModelId)) {
+      return inputs.textModelId;
+    }
+    if (modelDefaults.text && textModels.some((model) => model.id === modelDefaults.text)) {
+      return modelDefaults.text;
+    }
+    return textModels[0]?.id ?? "";
+  }, [inputs.textModelId, modelDefaults.text, textModels]);
+  const selectedTextModel = useMemo(() => {
+    return textModels.find((model) => model.id === resolvedTextModelId) ?? null;
+  }, [resolvedTextModelId, textModels]);
+  const startDisabled = loading || !resolvedTextModelId;
   const streamHtml = useMemo(() => renderMarkdown(streamContent), [streamContent]);
   const activeStepLabel = useMemo(() => {
     return WORKFLOW_STEPS.find((step) => step.id === activeStepId)?.label ?? "";
@@ -447,7 +471,8 @@ export default function ProjectDetail() {
       riskMethod: result.data.inputs?.risk_method ?? "五因素法",
       evalTool: normalizeEvalTool(result.data.inputs?.eval_tool),
       processStepsText: formatProcessSteps(result.data.inputs?.process_steps),
-      templateId: result.data.inputs?.template_id ?? ""
+      templateId: result.data.inputs?.template_id ?? "",
+      textModelId: result.data.inputs?.text_model_id ?? ""
     });
   };
 
@@ -458,9 +483,18 @@ export default function ProjectDetail() {
     }
   };
 
+  const loadModels = async () => {
+    const result = await api.listModels();
+    if (result.data) {
+      setModels(result.data.models);
+      setModelDefaults(result.data.defaults);
+    }
+  };
+
   useEffect(() => {
     loadProject();
     loadTemplates();
+    loadModels();
   }, [projectId]);
 
   useEffect(() => {
@@ -473,6 +507,16 @@ export default function ProjectDetail() {
       }
     });
   }, [inputs.templateId, templateDraft]);
+
+  useEffect(() => {
+    if (!resolvedTextModelId) {
+      return;
+    }
+    if (inputs.textModelId && textModels.some((model) => model.id === inputs.textModelId)) {
+      return;
+    }
+    setInputs((prev) => ({ ...prev, textModelId: resolvedTextModelId }));
+  }, [inputs.textModelId, resolvedTextModelId, textModels]);
 
   const resetWorkflowSteps = () => {
     setWorkflowSteps(WORKFLOW_STEPS.map((step) => ({ ...step, status: "pending" as WorkflowStepStatus })));
@@ -655,6 +699,8 @@ export default function ProjectDetail() {
     }
     const processStepsText =
       typeof patch.processStepsText === "string" ? patch.processStepsText : inputs.processStepsText;
+    const textModelId =
+      typeof patch.textModelId === "string" ? patch.textModelId : inputs.textModelId;
     setLoading(true);
     const result = await api.updateProjectInputs(projectId, {
       scope: patch.scope,
@@ -663,7 +709,8 @@ export default function ProjectDetail() {
       riskMethod: patch.riskMethod,
       evalTool: patch.evalTool,
       processSteps: parseProcessStepsText(processStepsText),
-      templateId: patch.templateId
+      templateId: patch.templateId,
+      textModelId
     });
     setLoading(false);
     if (result.error) {
@@ -818,6 +865,10 @@ export default function ProjectDetail() {
     if (!projectId) {
       return;
     }
+    if (!resolvedTextModelId) {
+      setMessage("暂无可用模型，请联系管理员配置默认模型。");
+      return;
+    }
     setLoading(true);
     setIsStreaming(true);
     setStreamContent("");
@@ -848,7 +899,7 @@ export default function ProjectDetail() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateContent: templateDraft }),
+        body: JSON.stringify({ templateContent: templateDraft, textModelId: resolvedTextModelId }),
         signal: abortController.signal
       });
 
@@ -1115,6 +1166,31 @@ export default function ProjectDetail() {
     await loadProject();
   };
 
+  const renderModelSelect = (className?: string) => {
+    const disabled = textModels.length === 0;
+    return (
+      <div className={`model-select ${className ?? ""}`.trim()}>
+        <span className="muted small">评估模型（OpenAI 兼容）</span>
+        <select
+          value={resolvedTextModelId}
+          onChange={(e) => setInputs((prev) => ({ ...prev, textModelId: e.target.value }))}
+          disabled={disabled || loading}
+        >
+          {disabled ? (
+            <option value="">暂无可用模型</option>
+          ) : (
+            textModels.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.name} · {model.model_name}
+                {model.is_default ? "（默认）" : ""}
+              </option>
+            ))
+          )}
+        </select>
+      </div>
+    );
+  };
+
   return (
     <div className="project-detail">
       <div className="project-header">
@@ -1126,7 +1202,8 @@ export default function ProjectDetail() {
           <button className="ghost" onClick={handleSaveAll} disabled={loading}>
             保存项目设置
           </button>
-          <button onClick={handleCreateReport} disabled={loading}>
+          {renderModelSelect("inline")}
+          <button onClick={handleCreateReport} disabled={startDisabled}>
             {loading ? "评估中..." : "开始评估"}
           </button>
           {isStreaming ? (
@@ -1385,6 +1462,10 @@ export default function ProjectDetail() {
                 <strong>模板：</strong>
                 <span>{selectedTemplate ? selectedTemplate.name : "未选择模板"}</span>
               </div>
+              <div>
+                <strong>模型：</strong>
+                <span>{selectedTextModel ? `${selectedTextModel.name} · ${selectedTextModel.model_name}` : "未选择模型"}</span>
+              </div>
             </div>
           </div>
           <div className="form-section span-4 action-panel">
@@ -1392,9 +1473,12 @@ export default function ProjectDetail() {
               <button className="ghost" onClick={handleSaveAll} disabled={loading}>
                 保存项目设置
               </button>
-              <button onClick={handleCreateReport} disabled={loading}>
-                {loading ? "评估中..." : "开始评估"}
-              </button>
+              <div className="action-row">
+                {renderModelSelect("compact")}
+                <button onClick={handleCreateReport} disabled={startDisabled}>
+                  {loading ? "评估中..." : "开始评估"}
+                </button>
+              </div>
               {isStreaming ? (
                 <button className="danger" onClick={handleStopReport}>
                   停止评估
@@ -1500,6 +1584,7 @@ export default function ProjectDetail() {
                 <div className="report-meta">
                   <span>版本 {report.version}</span>
                   <span className="muted">{formatMinute(report.created_at)}</span>
+                  {report.model_name ? <span className="muted">模型：{report.model_name}</span> : null}
                   <span className="muted">
                     Token: {report.total_tokens ?? "-"}{" "}
                     {report.prompt_tokens || report.completion_tokens

@@ -1,4 +1,4 @@
-import type { Env } from "./types";
+import type { ModelRuntimeConfig } from "./types";
 import {
   buildActionsPrompt,
   buildFmeaScoringPrompt,
@@ -93,6 +93,11 @@ type StreamHandlers = {
   onContextEvidence?: (items: Array<{ source: string; content: string; score: number }>) => void;
 };
 
+type ModelContext = {
+  llm: ModelRuntimeConfig;
+  embedding?: ModelRuntimeConfig | null;
+};
+
 function pickUsage(usage?: TokenUsage | null): TokenUsage | undefined {
   if (!usage) {
     return undefined;
@@ -117,12 +122,12 @@ function accumulateUsage(total: TokenUsage | undefined, next?: TokenUsage | null
 }
 
 async function callJsonLlm<T>(
-  env: Env,
+  model: ModelRuntimeConfig,
   userPrompt: string,
   signal?: AbortSignal
 ): Promise<{ data: T; usage?: TokenUsage }> {
   const payload = {
-    model: env.OPENAI_MODEL,
+    model: model.model,
     temperature: 0.2,
     messages: [
       { role: "system", content: SYSTEM_QRM },
@@ -130,11 +135,11 @@ async function callJsonLlm<T>(
     ]
   };
 
-  const response = await fetch(`${env.OPENAI_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
+  const response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${env.OPENAI_API_KEY}`
+      Authorization: `Bearer ${model.apiKey}`
     },
     body: JSON.stringify(payload),
     signal
@@ -162,14 +167,14 @@ async function callJsonLlm<T>(
 }
 
 async function callJsonLlmStream<T>(
-  env: Env,
+  model: ModelRuntimeConfig,
   userPrompt: string,
   step: StepName,
   handlers?: StreamHandlers,
   signal?: AbortSignal
 ): Promise<{ data: T; usage?: TokenUsage }> {
   const payload = {
-    model: env.OPENAI_MODEL,
+    model: model.model,
     temperature: 0.2,
     stream: true,
     stream_options: { include_usage: true },
@@ -179,12 +184,12 @@ async function callJsonLlmStream<T>(
     ]
   };
 
-  const response = await fetch(`${env.OPENAI_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
+  const response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
-      Authorization: `Bearer ${env.OPENAI_API_KEY}`
+      Authorization: `Bearer ${model.apiKey}`
     },
     body: JSON.stringify(payload),
     signal
@@ -287,12 +292,12 @@ async function callJsonLlmStream<T>(
 }
 
 async function callMarkdownLlm(
-  env: Env,
+  model: ModelRuntimeConfig,
   userPrompt: string,
   signal?: AbortSignal
 ): Promise<{ content: string; usage?: TokenUsage }> {
   const payload = {
-    model: env.OPENAI_MODEL,
+    model: model.model,
     temperature: 0.2,
     messages: [
       { role: "system", content: SYSTEM_QRM_MARKDOWN },
@@ -300,11 +305,11 @@ async function callMarkdownLlm(
     ]
   };
 
-  const response = await fetch(`${env.OPENAI_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
+  const response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${env.OPENAI_API_KEY}`
+      Authorization: `Bearer ${model.apiKey}`
     },
     body: JSON.stringify(payload),
     signal
@@ -328,13 +333,13 @@ async function callMarkdownLlm(
 }
 
 async function callMarkdownStream(
-  env: Env,
+  model: ModelRuntimeConfig,
   userPrompt: string,
   handlers?: StreamHandlers,
   signal?: AbortSignal
 ): Promise<{ content: string; usage?: TokenUsage }> {
   const payload = {
-    model: env.OPENAI_MODEL,
+    model: model.model,
     temperature: 0.2,
     stream: true,
     stream_options: { include_usage: true },
@@ -344,12 +349,12 @@ async function callMarkdownStream(
     ]
   };
 
-  const response = await fetch(`${env.OPENAI_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
+  const response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
-      Authorization: `Bearer ${env.OPENAI_API_KEY}`
+      Authorization: `Bearer ${model.apiKey}`
     },
     body: JSON.stringify(payload),
     signal
@@ -668,7 +673,7 @@ async function sleep(ms: number, signal?: AbortSignal) {
 }
 
 async function runWorkflow(
-  env: Env,
+  models: ModelContext,
   input: ReportInput,
   handlers?: StreamHandlers,
   signal?: AbortSignal
@@ -676,7 +681,7 @@ async function runWorkflow(
   ensureNotAborted(signal);
   handlers?.onStep?.("context", "running");
   const contextStages: string[] = [];
-  const context = await buildWorkflowContext(env, input, undefined, {
+  const context = await buildWorkflowContext(models.embedding ?? null, input, undefined, {
     onStage: (message) => {
       contextStages.push(message);
       handlers?.onContextStage?.(message);
@@ -717,13 +722,13 @@ async function runWorkflow(
       });
   const riskResponse = handlers?.onLlmDelta
     ? await callJsonLlmStream<RiskIdentificationOutput>(
-        env,
+        models.llm,
         riskPrompt,
         "risk_identification",
         handlers,
         signal
       )
-    : await callJsonLlm<RiskIdentificationOutput>(env, riskPrompt, signal);
+    : await callJsonLlm<RiskIdentificationOutput>(models.llm, riskPrompt, signal);
   let usage = accumulateUsage(undefined, riskResponse.usage);
   handlers?.onUsage?.(usage ?? {});
   const riskItems = parseRiskIdentification(riskResponse.data, useProcessFlow ? "process_flow" : "five_factors");
@@ -747,8 +752,14 @@ async function runWorkflow(
     objectiveBias: context.objectiveBias
   });
   const scoringResponse = handlers?.onLlmDelta
-    ? await callJsonLlmStream<FmeaScoringOutput>(env, scoringPrompt, "fmea_scoring", handlers, signal)
-    : await callJsonLlm<FmeaScoringOutput>(env, scoringPrompt, signal);
+    ? await callJsonLlmStream<FmeaScoringOutput>(
+        models.llm,
+        scoringPrompt,
+        "fmea_scoring",
+        handlers,
+        signal
+      )
+    : await callJsonLlm<FmeaScoringOutput>(models.llm, scoringPrompt, signal);
   usage = accumulateUsage(usage, scoringResponse.usage);
   handlers?.onUsage?.(usage ?? {});
   const scoring = parseFmeaScoring(scoringResponse.data, riskItems.map((item) => item.risk_id));
@@ -787,8 +798,14 @@ async function runWorkflow(
       evidenceBlocks: context.evidenceBlocks
     });
     const actionResponse = handlers?.onLlmDelta
-      ? await callJsonLlmStream<ActionOutput>(env, actionPrompt, "action_generation", handlers, signal)
-      : await callJsonLlm<ActionOutput>(env, actionPrompt, signal);
+      ? await callJsonLlmStream<ActionOutput>(
+          models.llm,
+          actionPrompt,
+          "action_generation",
+          handlers,
+          signal
+        )
+      : await callJsonLlm<ActionOutput>(models.llm, actionPrompt, signal);
     usage = accumulateUsage(usage, actionResponse.usage);
     handlers?.onUsage?.(usage ?? {});
     actions = parseActions(actionResponse.data, needActions.map((item) => item.risk_id));
@@ -835,8 +852,8 @@ async function runWorkflow(
     actionsJson: JSON.stringify(renderActions)
   });
   const renderResult = handlers?.onDelta
-    ? await callMarkdownStream(env, renderPrompt, handlers, signal)
-    : await callMarkdownLlm(env, renderPrompt, signal);
+    ? await callMarkdownStream(models.llm, renderPrompt, handlers, signal)
+    : await callMarkdownLlm(models.llm, renderPrompt, signal);
   usage = accumulateUsage(usage, renderResult.usage);
   handlers?.onUsage?.(usage ?? {});
   const markdown = renderResult.content;
@@ -854,20 +871,20 @@ async function runWorkflow(
   return { markdown, json, usage };
 }
 
-export async function generateReport(env: Env, input: ReportInput): Promise<GeneratedReport> {
-  return runWorkflow(env, input);
+export async function generateReport(models: ModelContext, input: ReportInput): Promise<GeneratedReport> {
+  return runWorkflow(models, input);
 }
 
-export async function generateReportMarkdown(env: Env, input: ReportInput): Promise<GeneratedReport> {
-  const report = await runWorkflow(env, input);
+export async function generateReportMarkdown(models: ModelContext, input: ReportInput): Promise<GeneratedReport> {
+  const report = await runWorkflow(models, input);
   return { markdown: report.markdown, usage: report.usage };
 }
 
 export async function generateReportStream(
-  env: Env,
+  models: ModelContext,
   input: ReportInput,
   handlers: StreamHandlers,
   options?: { signal?: AbortSignal }
 ): Promise<GeneratedReport> {
-  return runWorkflow(env, input, handlers, options?.signal);
+  return runWorkflow(models, input, handlers, options?.signal);
 }

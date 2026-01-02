@@ -289,6 +289,76 @@ button.danger {
   flex-wrap: wrap;
 }
 
+.admin-models {
+  display: grid;
+  gap: 1.6rem;
+}
+
+.admin-models-grid {
+  display: grid;
+  gap: 1.6rem;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.model-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.model-card {
+  padding: 1.1rem 1.2rem;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: #fff;
+  display: grid;
+  gap: 0.8rem;
+}
+
+.model-card.default {
+  border-color: rgba(15, 118, 110, 0.4);
+  box-shadow: 0 10px 24px rgba(15, 118, 110, 0.08);
+}
+
+.model-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.8rem;
+}
+
+.model-card h4 {
+  margin: 0;
+}
+
+.model-badge {
+  border-radius: 999px;
+  border: 1px solid rgba(15, 118, 110, 0.2);
+  background: rgba(15, 118, 110, 0.12);
+  color: #0f766e;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+}
+
+.model-meta {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+
+.model-edit {
+  border-top: 1px dashed var(--border);
+  padding-top: 0.8rem;
+  display: grid;
+  gap: 0.8rem;
+}
+
 .project-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -355,6 +425,7 @@ button.danger {
   display: flex;
   gap: 0.8rem;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .input-grid {
@@ -427,6 +498,31 @@ button.danger {
   align-items: center;
   height: 100%;
   flex-direction: column;
+}
+
+.action-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.model-select {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 220px;
+}
+
+.model-select select {
+  width: 100%;
+}
+
+.model-select.inline {
+  min-width: 240px;
+}
+
+.model-select.compact {
+  min-width: 200px;
 }
 
 .template-picker {
@@ -1010,6 +1106,12 @@ button.danger {
 
   .workflow-grid {
     grid-template-columns: 1fr;
+  }
+
+  .model-select,
+  .model-select.inline,
+  .model-select.compact {
+    min-width: 100%;
   }
 }
 

@@ -10,7 +10,7 @@ import type {
   WorkflowContext
 } from "./aiTypes";
 import { DEFAULT_TEMPLATE } from "./prompts";
-import type { Env } from "./types";
+import type { ModelRuntimeConfig } from "./types";
 
 const FIVE_FACTOR_DIMENSIONS = ["人员", "设备与设施", "物料", "法规/程序", "环境"];
 const ACTION_TYPES = [
@@ -41,7 +41,7 @@ export function summarizeTemplateRequirements(templateContent: string | null): s
 }
 
 export async function buildWorkflowContext(
-  env: Env,
+  embeddingModel: ModelRuntimeConfig | null,
   input: ReportInput,
   evidenceTopK = 4,
   options?: { onStage?: (message: string) => void }
@@ -55,7 +55,7 @@ export async function buildWorkflowContext(
 
   const query = [scope, background, objectiveBias].filter(Boolean).join(" ");
   const evidenceChunks = await buildEvidenceChunks(
-    env,
+    embeddingModel,
     input.sopTexts,
     input.literatureTexts,
     query,
@@ -75,7 +75,7 @@ export async function buildWorkflowContext(
     evidenceBlocks,
     evidenceChunks,
     retrievalMeta: {
-      usedEmbedding: hasEmbeddingConfig(env),
+      usedEmbedding: hasEmbeddingConfig(embeddingModel),
       sopTextCount: input.sopTexts.length,
       literatureTextCount: input.literatureTexts.length,
       evidenceChunkCount: evidenceChunks.length
@@ -84,15 +84,15 @@ export async function buildWorkflowContext(
 }
 
 async function buildEvidenceChunks(
-  env: Env,
+  embeddingModel: ModelRuntimeConfig | null,
   sopTexts: string[],
   literatureTexts: string[],
   query: string,
   topK: number,
   options?: { onStage?: (message: string) => void }
 ): Promise<EvidenceChunk[]> {
-  if (hasEmbeddingConfig(env)) {
-    return await buildEmbeddingEvidence(env, sopTexts, literatureTexts, query, topK, options);
+  if (hasEmbeddingConfig(embeddingModel)) {
+    return await buildEmbeddingEvidence(embeddingModel, sopTexts, literatureTexts, query, topK, options);
   }
   options?.onStage?.("关键词检索中...");
   const queryTokens = extractKeywords(query);
@@ -101,12 +101,12 @@ async function buildEvidenceChunks(
   return [...sopChunks, ...literatureChunks];
 }
 
-function hasEmbeddingConfig(env: Env): boolean {
-  return Boolean(env.DASHSCOPE_API_KEY);
+function hasEmbeddingConfig(embeddingModel: ModelRuntimeConfig | null): boolean {
+  return Boolean(embeddingModel?.apiKey && embeddingModel?.baseUrl && embeddingModel?.model);
 }
 
 async function buildEmbeddingEvidence(
-  env: Env,
+  embeddingModel: ModelRuntimeConfig | null,
   sopTexts: string[],
   literatureTexts: string[],
   query: string,
@@ -114,19 +114,19 @@ async function buildEmbeddingEvidence(
   options?: { onStage?: (message: string) => void }
 ): Promise<EvidenceChunk[]> {
   options?.onStage?.("向量化中...");
-  const queryEmbedding = await getEmbeddings(env, [query]);
+  const queryEmbedding = await getEmbeddings(embeddingModel, [query]);
   if (queryEmbedding.length === 0) {
     return [];
   }
   const [vector] = queryEmbedding;
   options?.onStage?.("向量检索中...");
-  const sopChunks = await collectChunksByEmbedding(env, "sop", sopTexts, vector, topK);
-  const literatureChunks = await collectChunksByEmbedding(env, "literature", literatureTexts, vector, topK);
+  const sopChunks = await collectChunksByEmbedding(embeddingModel, "sop", sopTexts, vector, topK);
+  const literatureChunks = await collectChunksByEmbedding(embeddingModel, "literature", literatureTexts, vector, topK);
   return [...sopChunks, ...literatureChunks];
 }
 
 async function collectChunksByEmbedding(
-  env: Env,
+  embeddingModel: ModelRuntimeConfig | null,
   source: "sop" | "literature",
   texts: string[],
   queryEmbedding: number[],
@@ -142,7 +142,7 @@ async function collectChunksByEmbedding(
   if (chunkTexts.length === 0) {
     return [];
   }
-  const embeddings = await getEmbeddings(env, chunkTexts);
+  const embeddings = await getEmbeddings(embeddingModel, chunkTexts);
   if (embeddings.length !== chunkTexts.length) {
     throw new Error("Embedding 返回数量不匹配");
   }
@@ -154,16 +154,19 @@ async function collectChunksByEmbedding(
   return sorted.slice(0, topK);
 }
 
-async function getEmbeddings(env: Env, inputs: string[]): Promise<number[][]> {
+async function getEmbeddings(
+  embeddingModel: ModelRuntimeConfig | null,
+  inputs: string[]
+): Promise<number[][]> {
   if (inputs.length === 0) {
     return [];
   }
-  const apiKey = env.DASHSCOPE_API_KEY;
-  if (!apiKey) {
+  const apiKey = embeddingModel?.apiKey;
+  if (!apiKey || !embeddingModel) {
     return [];
   }
-  const baseUrl = (env.DASHSCOPE_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1").replace(/\/$/, "");
-  const model = env.DASHSCOPE_EMBEDDING_MODEL || "text-embedding-v4";
+  const baseUrl = embeddingModel.baseUrl.replace(/\/$/, "");
+  const model = embeddingModel.model;
   const prefix = `${baseUrl}|${model}|`;
   const keys = await Promise.all(inputs.map((text) => hashText(`${prefix}${text}`)));
   const results: number[][] = new Array(inputs.length);

@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { authMiddleware, clearSession, clearSessionCookie, createSession, hashPassword, requireAdmin, requireAuth, setSessionCookie, verifyPassword } from "./auth";
-import type { Env, User } from "./types";
+import type { Env, ModelCategory, ModelRuntimeConfig, User } from "./types";
 import { nowIso, putR2Json, putR2Text, readR2Text, safeJsonParse } from "./utils";
 import { generateReport, generateReportStream } from "./ai";
 import { renderDocx } from "./exporters";
+import { ensureDefaultModel, fetchDefaultModel, fetchModelById, listAdminModels, listPublicModels, normalizeModelCategory, sanitizeBaseUrl, setDefaultModel } from "./models";
 
 const app = new Hono<{ Bindings: Env; Variables: { user: User | null } }>();
 const ALLOWED_EVAL_TOOLS = new Set(["FMEA"]);
@@ -40,6 +41,35 @@ const parseProcessStepsFromDb = (value: unknown) => {
   const parsed = safeJsonParse(value);
   const steps = normalizeProcessSteps(parsed);
   return steps && steps.length > 0 ? steps : [];
+};
+
+const isValidHttpUrl = (value: string) => {
+  return /^https?:\/\//i.test(value);
+};
+
+const resolveTextModel = async (
+  env: Env,
+  requestedId: string | null,
+  storedId: string | null
+): Promise<{ model: ModelRuntimeConfig | null; error?: string }> => {
+  if (requestedId) {
+    const model = await fetchModelById(env, requestedId, "text");
+    if (!model) {
+      return { model: null, error: "指定模型不存在或不可用" };
+    }
+    return { model };
+  }
+  if (storedId) {
+    const model = await fetchModelById(env, storedId, "text");
+    if (model) {
+      return { model };
+    }
+  }
+  const fallback = await fetchDefaultModel(env, "text");
+  if (!fallback) {
+    return { model: null, error: "未配置默认文本生成模型，请联系管理员" };
+  }
+  return { model: fallback };
 };
 
 app.use("*", async (c, next) => {
@@ -165,6 +195,147 @@ app.get("/api/templates/:id", requireAuth, async (c) => {
   });
 });
 
+app.get("/api/models", requireAuth, async (c) => {
+  const result = await listPublicModels(c.env);
+  return c.json(result);
+});
+
+app.get("/api/admin/models", requireAdmin, async (c) => {
+  const models = await listAdminModels(c.env);
+  return c.json({ models });
+});
+
+app.post("/api/admin/models", requireAdmin, async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const name = typeof body?.name === "string" ? body.name.trim() : "";
+  const modelName = typeof body?.modelName === "string" ? body.modelName.trim() : "";
+  const baseUrlRaw = typeof body?.baseUrl === "string" ? body.baseUrl.trim() : "";
+  const apiKey = typeof body?.apiKey === "string" ? body.apiKey.trim() : "";
+  const category = normalizeModelCategory(body?.category);
+  const isDefault = body?.isDefault === true;
+
+  if (!name || !modelName || !baseUrlRaw || !apiKey || !category) {
+    return c.json({ error: "模型名称、类别、Base URL 与 API Key 不能为空" }, 400);
+  }
+  const baseUrl = sanitizeBaseUrl(baseUrlRaw);
+  if (!isValidHttpUrl(baseUrl)) {
+    return c.json({ error: "Base URL 必须以 http 或 https 开头" }, 400);
+  }
+
+  const id = crypto.randomUUID();
+  const now = nowIso();
+  await c.env.DB.prepare(
+    "INSERT INTO models (id, name, category, model_name, base_url, api_key, is_default, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)"
+  )
+    .bind(id, name, category, modelName, baseUrl, apiKey, isDefault ? 1 : 0, now, now)
+    .run();
+
+  if (isDefault) {
+    await setDefaultModel(c.env, category, id);
+  } else {
+    await ensureDefaultModel(c.env, category);
+  }
+
+  return c.json({ id, name, category, model_name: modelName, base_url: baseUrl, is_default: isDefault });
+});
+
+app.patch("/api/admin/models/:id", requireAdmin, async (c) => {
+  const modelId = c.req.param("id");
+  const existing = await c.env.DB.prepare(
+    "SELECT id, category, is_default FROM models WHERE id = ?"
+  )
+    .bind(modelId)
+    .first();
+  if (!existing) {
+    return c.json({ error: "模型不存在" }, 404);
+  }
+
+  const body = await c.req.json().catch(() => null);
+  const name = typeof body?.name === "string" ? body.name.trim() : null;
+  const modelName = typeof body?.modelName === "string" ? body.modelName.trim() : null;
+  const baseUrlRaw = typeof body?.baseUrl === "string" ? body.baseUrl.trim() : null;
+  const apiKeyRaw = typeof body?.apiKey === "string" ? body.apiKey.trim() : null;
+  const category = body?.category ? normalizeModelCategory(body.category) : null;
+  const isDefault = typeof body?.isDefault === "boolean" ? body.isDefault : null;
+
+  if (body?.name !== undefined && !name) {
+    return c.json({ error: "模型名称不能为空" }, 400);
+  }
+  if (body?.modelName !== undefined && !modelName) {
+    return c.json({ error: "模型标识不能为空" }, 400);
+  }
+  let baseUrl: string | null = null;
+  if (body?.baseUrl !== undefined) {
+    if (!baseUrlRaw) {
+      return c.json({ error: "Base URL 不能为空" }, 400);
+    }
+    baseUrl = sanitizeBaseUrl(baseUrlRaw);
+    if (!isValidHttpUrl(baseUrl)) {
+      return c.json({ error: "Base URL 必须以 http 或 https 开头" }, 400);
+    }
+  }
+
+  if (body?.category !== undefined && !category) {
+    return c.json({ error: "模型类别不合法" }, 400);
+  }
+
+  const apiKey = apiKeyRaw && apiKeyRaw.trim() ? apiKeyRaw.trim() : null;
+  const previousCategory = existing.category as ModelCategory;
+  const nextCategory = category ?? previousCategory;
+  const wasDefault = existing.is_default === 1;
+  const categoryChanged = nextCategory !== previousCategory;
+  const nextIsDefault = typeof isDefault === "boolean" ? isDefault : categoryChanged ? false : null;
+
+  await c.env.DB.prepare(
+    "UPDATE models SET name = COALESCE(?, name), category = COALESCE(?, category), model_name = COALESCE(?, model_name), base_url = COALESCE(?, base_url), api_key = COALESCE(?, api_key), is_default = COALESCE(?, is_default), updated_at = ? WHERE id = ?"
+  )
+    .bind(
+      name,
+      category,
+      modelName,
+      baseUrl,
+      apiKey,
+      nextIsDefault === null ? null : nextIsDefault ? 1 : 0,
+      nowIso(),
+      modelId
+    )
+    .run();
+
+  if (nextIsDefault) {
+    await setDefaultModel(c.env, nextCategory, modelId);
+  } else {
+    await ensureDefaultModel(c.env, nextCategory);
+  }
+  if (categoryChanged || (wasDefault && nextIsDefault === false)) {
+    await ensureDefaultModel(c.env, previousCategory, modelId);
+  }
+
+  return c.json({ ok: true });
+});
+
+app.delete("/api/admin/models/:id", requireAdmin, async (c) => {
+  const modelId = c.req.param("id");
+  const existing = await c.env.DB.prepare(
+    "SELECT id, category, is_default FROM models WHERE id = ? AND is_active = 1"
+  )
+    .bind(modelId)
+    .first();
+  if (!existing) {
+    return c.json({ error: "模型不存在" }, 404);
+  }
+
+  await c.env.DB.prepare("UPDATE models SET is_active = 0, is_default = 0, updated_at = ? WHERE id = ?")
+    .bind(nowIso(), modelId)
+    .run();
+
+  const category = existing.category as ModelCategory;
+  if (existing.is_default === 1) {
+    await ensureDefaultModel(c.env, category, modelId);
+  }
+
+  return c.json({ ok: true });
+});
+
 app.post("/api/admin/templates", requireAdmin, async (c) => {
   const form = await c.req.formData();
   const file = form.get("file");
@@ -252,7 +423,7 @@ app.get("/api/projects/:id", requireAuth, async (c) => {
   }
 
   const inputs = await c.env.DB.prepare(
-    "SELECT scope, background, objective, risk_method, eval_tool, process_steps, template_id, updated_at FROM project_inputs WHERE project_id = ?"
+    "SELECT scope, background, objective, risk_method, eval_tool, process_steps, template_id, text_model_id, updated_at FROM project_inputs WHERE project_id = ?"
   )
     .bind(projectId)
     .first();
@@ -264,7 +435,7 @@ app.get("/api/projects/:id", requireAuth, async (c) => {
     .all();
 
   const reports = await c.env.DB.prepare(
-    "SELECT id, version, status, created_at, prompt_tokens, completion_tokens, total_tokens FROM reports WHERE project_id = ? ORDER BY version DESC"
+    "SELECT id, version, status, created_at, prompt_tokens, completion_tokens, total_tokens, model_name FROM reports WHERE project_id = ? ORDER BY version DESC"
   )
     .bind(projectId)
     .all();
@@ -370,6 +541,12 @@ app.patch("/api/projects/:id/inputs", requireAuth, async (c) => {
   const hasProcessSteps = Object.prototype.hasOwnProperty.call(body ?? {}, "processSteps");
   const processStepsRaw = hasProcessSteps ? body?.processSteps : null;
   const templateId = typeof body?.templateId === "string" ? body.templateId.trim() : null;
+  const hasTextModelId = Object.prototype.hasOwnProperty.call(body ?? {}, "textModelId");
+  const textModelIdRaw = hasTextModelId ? body?.textModelId : null;
+  let textModelId = typeof textModelIdRaw === "string" ? textModelIdRaw.trim() : null;
+  if (textModelId === "") {
+    textModelId = null;
+  }
 
   if (evalTool && !ALLOWED_EVAL_TOOLS.has(evalTool)) {
     return c.json({ error: "评估工具暂未开放" }, 400);
@@ -377,11 +554,17 @@ app.patch("/api/projects/:id/inputs", requireAuth, async (c) => {
   if (hasProcessSteps && !Array.isArray(processStepsRaw)) {
     return c.json({ error: "流程步骤格式不正确" }, 400);
   }
+  if (hasTextModelId && textModelId) {
+    const model = await fetchModelById(c.env, textModelId, "text");
+    if (!model) {
+      return c.json({ error: "选择的模型不存在或不可用" }, 400);
+    }
+  }
   const processSteps = hasProcessSteps ? normalizeProcessSteps(processStepsRaw) : null;
   const processStepsJson = hasProcessSteps ? JSON.stringify(processSteps ?? []) : null;
 
   await c.env.DB.prepare(
-    `UPDATE project_inputs SET scope = COALESCE(?, scope), background = COALESCE(?, background), objective = COALESCE(?, objective), risk_method = COALESCE(?, risk_method), eval_tool = COALESCE(?, eval_tool), process_steps = COALESCE(?, process_steps), template_id = COALESCE(?, template_id), updated_at = ? WHERE project_id = ?`
+    `UPDATE project_inputs SET scope = COALESCE(?, scope), background = COALESCE(?, background), objective = COALESCE(?, objective), risk_method = COALESCE(?, risk_method), eval_tool = COALESCE(?, eval_tool), process_steps = COALESCE(?, process_steps), template_id = COALESCE(?, template_id), text_model_id = COALESCE(?, text_model_id), updated_at = ? WHERE project_id = ?`
   )
     .bind(
       scope,
@@ -391,6 +574,7 @@ app.patch("/api/projects/:id/inputs", requireAuth, async (c) => {
       evalTool,
       processStepsJson,
       templateId,
+      hasTextModelId ? textModelId : null,
       nowIso(),
       projectId
     )
@@ -483,9 +667,10 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
 
   const body = await c.req.json().catch(() => null);
   let templateContent = typeof body?.templateContent === "string" ? body.templateContent : null;
+  const requestedTextModelId = typeof body?.textModelId === "string" ? body.textModelId.trim() : null;
 
   const inputs = await c.env.DB.prepare(
-    "SELECT scope, background, objective, risk_method, eval_tool, process_steps, template_id FROM project_inputs WHERE project_id = ?"
+    "SELECT scope, background, objective, risk_method, eval_tool, process_steps, template_id, text_model_id FROM project_inputs WHERE project_id = ?"
   )
     .bind(projectId)
     .first();
@@ -530,6 +715,22 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
     }
   }
 
+  const storedTextModelId = typeof inputs?.text_model_id === "string" ? inputs.text_model_id.trim() : null;
+  const { model: textModel, error: modelError } = await resolveTextModel(
+    c.env,
+    requestedTextModelId,
+    storedTextModelId
+  );
+  if (!textModel) {
+    return c.json({ error: modelError ?? "模型不可用" }, 400);
+  }
+  if (requestedTextModelId && requestedTextModelId !== storedTextModelId) {
+    await c.env.DB.prepare("UPDATE project_inputs SET text_model_id = ?, updated_at = ? WHERE project_id = ?")
+      .bind(textModel.id, nowIso(), projectId)
+      .run();
+  }
+  const embeddingModel = await fetchDefaultModel(c.env, "embedding");
+
   const versionRow = await c.env.DB.prepare(
     "SELECT MAX(version) as max_version FROM reports WHERE project_id = ?"
   )
@@ -542,13 +743,22 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
   await putR2Text(c.env.BUCKET, templateSnapshotKey, templateContent || "");
 
   await c.env.DB.prepare(
-    "INSERT INTO reports (id, project_id, version, status, template_snapshot_key, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO reports (id, project_id, version, status, template_snapshot_key, created_by, created_at, model_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
   )
-    .bind(reportId, projectId, nextVersion, "running", templateSnapshotKey, c.get("user")?.id, nowIso())
+    .bind(
+      reportId,
+      projectId,
+      nextVersion,
+      "running",
+      templateSnapshotKey,
+      c.get("user")?.id,
+      nowIso(),
+      textModel.name
+    )
     .run();
 
   try {
-    const report = await generateReport(c.env, {
+    const report = await generateReport({ llm: textModel, embedding: embeddingModel }, {
       title: project.title as string,
       scope: (inputs?.scope as string) ?? null,
       background: (inputs?.background as string) ?? null,
@@ -610,9 +820,10 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
 
   const body = await c.req.json().catch(() => null);
   let templateContent = typeof body?.templateContent === "string" ? body.templateContent : null;
+  const requestedTextModelId = typeof body?.textModelId === "string" ? body.textModelId.trim() : null;
 
   const inputs = await c.env.DB.prepare(
-    "SELECT scope, background, objective, risk_method, eval_tool, process_steps, template_id FROM project_inputs WHERE project_id = ?"
+    "SELECT scope, background, objective, risk_method, eval_tool, process_steps, template_id, text_model_id FROM project_inputs WHERE project_id = ?"
   )
     .bind(projectId)
     .first();
@@ -627,6 +838,22 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
       templateContent = await readR2Text(c.env.BUCKET, templateRow.file_key as string);
     }
   }
+
+  const storedTextModelId = typeof inputs?.text_model_id === "string" ? inputs.text_model_id.trim() : null;
+  const { model: textModel, error: modelError } = await resolveTextModel(
+    c.env,
+    requestedTextModelId,
+    storedTextModelId
+  );
+  if (!textModel) {
+    return c.json({ error: modelError ?? "模型不可用" }, 400);
+  }
+  if (requestedTextModelId && requestedTextModelId !== storedTextModelId) {
+    await c.env.DB.prepare("UPDATE project_inputs SET text_model_id = ?, updated_at = ? WHERE project_id = ?")
+      .bind(textModel.id, nowIso(), projectId)
+      .run();
+  }
+  const embeddingModel = await fetchDefaultModel(c.env, "embedding");
 
   const files = await c.env.DB.prepare(
     "SELECT type, text_key, filename FROM project_files WHERE project_id = ?"
@@ -669,9 +896,18 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
   await putR2Text(c.env.BUCKET, templateSnapshotKey, templateContent || "");
 
   await c.env.DB.prepare(
-    "INSERT INTO reports (id, project_id, version, status, template_snapshot_key, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO reports (id, project_id, version, status, template_snapshot_key, created_by, created_at, model_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
   )
-    .bind(reportId, projectId, nextVersion, "running", templateSnapshotKey, c.get("user")?.id, nowIso())
+    .bind(
+      reportId,
+      projectId,
+      nextVersion,
+      "running",
+      templateSnapshotKey,
+      c.get("user")?.id,
+      nowIso(),
+      textModel.name
+    )
     .run();
 
   let aborted = false;
@@ -699,7 +935,7 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
       (async () => {
         try {
           let report = await generateReportStream(
-            c.env,
+            { llm: textModel, embedding: embeddingModel },
             {
               title: project.title as string,
               scope: (inputs?.scope as string) ?? null,
@@ -820,7 +1056,7 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
 app.get("/api/reports/:id", requireAuth, async (c) => {
   const reportId = c.req.param("id");
   const report = await c.env.DB.prepare(
-    "SELECT r.id, r.project_id, r.version, r.status, r.md_key, r.json_key, r.created_at, r.error_message, r.prompt_tokens, r.completion_tokens, r.total_tokens, p.title AS project_title FROM reports r JOIN projects p ON r.project_id = p.id WHERE r.id = ? AND p.owner_id = ?"
+    "SELECT r.id, r.project_id, r.version, r.status, r.md_key, r.json_key, r.created_at, r.error_message, r.prompt_tokens, r.completion_tokens, r.total_tokens, r.model_name, p.title AS project_title FROM reports r JOIN projects p ON r.project_id = p.id WHERE r.id = ? AND p.owner_id = ?"
   )
     .bind(reportId, c.get("user")?.id)
     .first();
