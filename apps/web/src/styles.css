@@ -621,6 +621,21 @@ button.danger {
   gap: 0.8rem;
 }
 
+.inline-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.span-full {
+  grid-column: 1 / -1;
+}
+
+.span-full textarea {
+  min-height: 240px;
+}
+
 .template-meta {
   display: grid;
   gap: 0.4rem;

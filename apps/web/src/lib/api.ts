@@ -74,6 +74,17 @@ export const api = {
       body: form
     });
   },
+  async updateTemplate(id: string, data: { name?: string; description?: string; content?: string }) {
+    return request<{ ok: boolean }>(`/api/admin/templates/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data)
+    });
+  },
+  async duplicateTemplate(id: string) {
+    return request<{ id: string; name: string }>(`/api/admin/templates/${id}/duplicate`, {
+      method: "POST"
+    });
+  },
   async deleteTemplate(id: string) {
     return request<{ ok: boolean }>(`/api/admin/templates/${id}`, { method: "DELETE" });
   },

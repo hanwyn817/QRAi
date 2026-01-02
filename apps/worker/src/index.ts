@@ -382,6 +382,75 @@ app.delete("/api/admin/templates/:id", requireAdmin, async (c) => {
   return c.json({ ok: true });
 });
 
+app.patch("/api/admin/templates/:id", requireAdmin, async (c) => {
+  const templateId = c.req.param("id");
+  const template = await c.env.DB.prepare(
+    "SELECT id, name, description, file_key, is_active FROM templates WHERE id = ?"
+  )
+    .bind(templateId)
+    .first();
+  if (!template || template.is_active !== 1) {
+    return c.json({ error: "模板不存在" }, 404);
+  }
+
+  const body = await c.req.json().catch(() => null);
+  const name = typeof body?.name === "string" ? body.name.trim() : null;
+  const descriptionRaw = typeof body?.description === "string" ? body.description.trim() : null;
+  const description = descriptionRaw === "" ? null : descriptionRaw;
+  const content = typeof body?.content === "string" ? body.content : null;
+
+  if (body?.name !== undefined && !name) {
+    return c.json({ error: "模板名称不能为空" }, 400);
+  }
+
+  if (content !== null && template.file_key) {
+    await c.env.BUCKET.put(template.file_key as string, content, {
+      httpMetadata: { contentType: "text/markdown; charset=utf-8" }
+    });
+  }
+
+  await c.env.DB.prepare(
+    "UPDATE templates SET name = COALESCE(?, name), description = COALESCE(?, description), updated_at = ? WHERE id = ?"
+  )
+    .bind(name, description, nowIso(), templateId)
+    .run();
+
+  return c.json({ ok: true });
+});
+
+app.post("/api/admin/templates/:id/duplicate", requireAdmin, async (c) => {
+  const templateId = c.req.param("id");
+  const template = await c.env.DB.prepare(
+    "SELECT id, name, description, file_key, is_active FROM templates WHERE id = ?"
+  )
+    .bind(templateId)
+    .first();
+  if (!template || template.is_active !== 1) {
+    return c.json({ error: "模板不存在" }, 404);
+  }
+  const content = template.file_key
+    ? await readR2Text(c.env.BUCKET, template.file_key as string)
+    : null;
+
+  const id = crypto.randomUUID();
+  const fileKey = `templates/${id}.md`;
+  const baseName = typeof template.name === "string" ? template.name.trim() : "模板";
+  const duplicateName = baseName.endsWith("副本") ? `${baseName} 2` : `${baseName} 副本`;
+
+  await c.env.BUCKET.put(fileKey, content ?? "", {
+    httpMetadata: { contentType: "text/markdown; charset=utf-8" }
+  });
+
+  const now = nowIso();
+  await c.env.DB.prepare(
+    "INSERT INTO templates (id, name, description, file_key, created_by, created_at, updated_at, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)"
+  )
+    .bind(id, duplicateName, template.description ?? null, fileKey, c.get("user")?.id, now, now)
+    .run();
+
+  return c.json({ id, name: duplicateName });
+});
+
 app.post("/api/projects", requireAuth, async (c) => {
   const body = await c.req.json().catch(() => null);
   const title = typeof body?.title === "string" ? body.title.trim() : "";

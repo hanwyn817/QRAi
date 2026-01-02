@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 
 function formatMinute(value?: string | null) {
@@ -25,6 +25,11 @@ export default function AdminTemplates() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editContent, setEditContent] = useState("");
+  const editSectionRef = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -62,6 +67,75 @@ export default function AdminTemplates() {
     setDescription("");
     setFile(null);
     setNotice("模板已上传");
+    await loadTemplates();
+  };
+
+  const handleEditStart = async (id: string) => {
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    const result = await api.getTemplate(id);
+    setLoading(false);
+    if (!result.data) {
+      setError(result.error ?? "模板加载失败");
+      return;
+    }
+    setEditingId(id);
+    setEditName(result.data.name);
+    setEditDescription(result.data.description ?? "");
+    setEditContent(result.data.content ?? "");
+    requestAnimationFrame(() => {
+      editSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+
+  const handleEditCancel = () => {
+    setEditingId(null);
+    setEditName("");
+    setEditDescription("");
+    setEditContent("");
+  };
+
+  const handleEditSave = async () => {
+    if (!editingId) {
+      return;
+    }
+    if (!editName.trim()) {
+      setError("模板名称不能为空");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    const result = await api.updateTemplate(editingId, {
+      name: editName.trim(),
+      description: editDescription.trim(),
+      content: editContent
+    });
+    setLoading(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setNotice("模板已更新");
+    handleEditCancel();
+    await loadTemplates();
+  };
+
+  const handleDuplicate = async (id: string, templateName: string) => {
+    if (!window.confirm(`确认复制模板「${templateName}」？`)) {
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    const result = await api.duplicateTemplate(id);
+    setLoading(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setNotice("模板副本已创建");
     await loadTemplates();
   };
 
@@ -143,13 +217,29 @@ export default function AdminTemplates() {
               <div key={template.id} className="template-card">
                 <div className="template-card-header">
                   <h4>{template.name}</h4>
-                  <button
-                    className="mini-button danger"
-                    onClick={() => handleDelete(template.id, template.name)}
-                    disabled={loading}
-                  >
-                    删除
-                  </button>
+                  <div className="inline-actions">
+                    <button
+                      className="mini-button"
+                      onClick={() => handleEditStart(template.id)}
+                      disabled={loading}
+                    >
+                      编辑
+                    </button>
+                    <button
+                      className="mini-button"
+                      onClick={() => handleDuplicate(template.id, template.name)}
+                      disabled={loading}
+                    >
+                      复制
+                    </button>
+                    <button
+                      className="mini-button danger"
+                      onClick={() => handleDelete(template.id, template.name)}
+                      disabled={loading}
+                    >
+                      删除
+                    </button>
+                  </div>
                 </div>
                 <p className="muted">{template.description || "无描述"}</p>
                 <div className="template-meta">
@@ -161,6 +251,42 @@ export default function AdminTemplates() {
           </div>
         )}
       </section>
+      {editingId ? (
+        <section className="card" ref={editSectionRef}>
+          <div className="section-header">
+            <h3>编辑模板</h3>
+            <span className="muted">修改名称、描述或内容</span>
+          </div>
+          <div className="form-grid admin-form-grid">
+            <label>
+              模板名称
+              <input value={editName} onChange={(e) => setEditName(e.target.value)} />
+            </label>
+            <label>
+              模板描述
+              <input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} />
+            </label>
+            <label className="span-full">
+              模板内容
+              <textarea
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                placeholder="编辑模板内容"
+              />
+            </label>
+          </div>
+          {error ? <div className="error">{error}</div> : null}
+          {notice ? <div className="info">{notice}</div> : null}
+          <div className="admin-actions">
+            <button onClick={handleEditSave} disabled={loading}>
+              {loading ? "保存中..." : "保存修改"}
+            </button>
+            <button className="ghost" onClick={handleEditCancel} disabled={loading}>
+              取消
+            </button>
+          </div>
+        </section>
+      ) : null}
       </div>
     </div>
   );
