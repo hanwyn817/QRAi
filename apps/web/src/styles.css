@@ -636,6 +636,24 @@ button.danger {
   min-height: 240px;
 }
 
+.pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
 .template-meta {
   display: grid;
   gap: 0.4rem;

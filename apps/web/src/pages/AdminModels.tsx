@@ -6,6 +6,11 @@ const CATEGORY_OPTIONS = [
   { value: "embedding" as const, label: "Embedding 模型", hint: "用于向量检索与上下文构建" },
   { value: "rerank" as const, label: "Rerank 模型", hint: "用于候选排序（预留）" }
 ];
+const PLAN_OPTIONS = [
+  { value: "free" as const, label: "Free" },
+  { value: "pro" as const, label: "Pro" },
+  { value: "max" as const, label: "Max" }
+];
 
 type AdminModel = {
   id: string;
@@ -17,6 +22,7 @@ type AdminModel = {
   is_default: boolean;
   is_active: boolean;
   updated_at: string;
+  allowed_plans: Array<"free" | "pro" | "max">;
 };
 
 function formatMinute(value?: string | null) {
@@ -44,7 +50,8 @@ export default function AdminModels() {
     modelName: "",
     baseUrl: "",
     apiKey: "",
-    isDefault: false
+    isDefault: false,
+    allowedPlans: ["free"] as Array<"free" | "pro" | "max">
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({
@@ -53,7 +60,8 @@ export default function AdminModels() {
     modelName: "",
     baseUrl: "",
     apiKey: "",
-    isDefault: false
+    isDefault: false,
+    allowedPlans: ["free"] as Array<"free" | "pro" | "max">
   });
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -112,16 +120,36 @@ export default function AdminModels() {
       modelName: form.modelName.trim(),
       baseUrl: form.baseUrl.trim(),
       apiKey: form.apiKey.trim(),
-      isDefault: form.isDefault
+      isDefault: form.isDefault,
+      allowedPlans: form.allowedPlans
     });
     setLoading(false);
     if (result.error) {
       setError(result.error);
       return;
     }
-    setForm({ name: "", category: "text", modelName: "", baseUrl: "", apiKey: "", isDefault: false });
+    setForm({
+      name: "",
+      category: "text",
+      modelName: "",
+      baseUrl: "",
+      apiKey: "",
+      isDefault: false,
+      allowedPlans: ["free"]
+    });
     setNotice("模型已保存");
     await loadModels();
+  };
+
+  const togglePlan = (
+    plans: Array<"free" | "pro" | "max">,
+    plan: "free" | "pro" | "max"
+  ) => {
+    if (plans.includes(plan)) {
+      const next = plans.filter((item) => item !== plan);
+      return next.length > 0 ? next : plans;
+    }
+    return [...plans, plan];
   };
 
   const handleEditStart = (model: AdminModel) => {
@@ -132,7 +160,8 @@ export default function AdminModels() {
       modelName: model.model_name,
       baseUrl: model.base_url,
       apiKey: "",
-      isDefault: model.is_default
+      isDefault: model.is_default,
+      allowedPlans: model.allowed_plans.length > 0 ? model.allowed_plans : ["free"]
     });
     setError(null);
     setNotice(null);
@@ -140,7 +169,15 @@ export default function AdminModels() {
 
   const handleEditCancel = () => {
     setEditingId(null);
-    setEditForm({ name: "", category: "text", modelName: "", baseUrl: "", apiKey: "", isDefault: false });
+    setEditForm({
+      name: "",
+      category: "text",
+      modelName: "",
+      baseUrl: "",
+      apiKey: "",
+      isDefault: false,
+      allowedPlans: ["free"]
+    });
   };
 
   const handleEditSave = async () => {
@@ -161,12 +198,14 @@ export default function AdminModels() {
       baseUrl: string;
       apiKey?: string;
       isDefault?: boolean;
+      allowedPlans?: Array<"free" | "pro" | "max">;
     } = {
       name: editForm.name.trim(),
       category: editForm.category,
       modelName: editForm.modelName.trim(),
       baseUrl: editForm.baseUrl.trim(),
-      isDefault: editForm.isDefault
+      isDefault: editForm.isDefault,
+      allowedPlans: editForm.allowedPlans
     };
     if (editForm.apiKey.trim()) {
       payload.apiKey = editForm.apiKey.trim();
@@ -275,6 +314,26 @@ export default function AdminModels() {
                 placeholder="仅保存到服务器，不回传"
               />
             </label>
+            <label className="span-full">
+              可用等级
+              <div className="pill-group">
+                {PLAN_OPTIONS.map((option) => (
+                  <label key={option.value} className="pill">
+                    <input
+                      type="checkbox"
+                      checked={form.allowedPlans.includes(option.value)}
+                      onChange={() =>
+                        setForm((prev) => ({
+                          ...prev,
+                          allowedPlans: togglePlan(prev.allowedPlans, option.value)
+                        }))
+                      }
+                    />
+                    {option.label}
+                  </label>
+                ))}
+              </div>
+            </label>
           </div>
           <div className="admin-actions">
             <button onClick={handleCreate} disabled={loading}>
@@ -324,6 +383,7 @@ export default function AdminModels() {
                       <div className="model-meta">
                         <span className="muted">Base URL：{model.base_url}</span>
                         <span className="muted">API Key：{model.api_key_masked || "已保存"}</span>
+                        <span className="muted">可用等级：{model.allowed_plans.join(" / ") || "Free"}</span>
                         <span className="muted">更新：{formatMinute(model.updated_at)}</span>
                       </div>
                       <div className="admin-actions">
@@ -391,6 +451,26 @@ export default function AdminModels() {
                                 value={editForm.apiKey}
                                 onChange={(e) => setEditForm((prev) => ({ ...prev, apiKey: e.target.value }))}
                               />
+                            </label>
+                            <label className="span-full">
+                              可用等级
+                              <div className="pill-group">
+                                {PLAN_OPTIONS.map((option) => (
+                                  <label key={option.value} className="pill">
+                                    <input
+                                      type="checkbox"
+                                      checked={editForm.allowedPlans.includes(option.value)}
+                                      onChange={() =>
+                                        setEditForm((prev) => ({
+                                          ...prev,
+                                          allowedPlans: togglePlan(prev.allowedPlans, option.value)
+                                        }))
+                                      }
+                                    />
+                                    {option.label}
+                                  </label>
+                                ))}
+                              </div>
                             </label>
                           </div>
                           <div className="admin-actions">

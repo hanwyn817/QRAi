@@ -4,7 +4,7 @@ import type { Env, ModelCategory, ModelRuntimeConfig, User } from "./types";
 import { nowIso, putR2Json, putR2Text, readR2Text, safeJsonParse } from "./utils";
 import { generateReport, generateReportStream } from "./ai";
 import { renderDocx } from "./exporters";
-import { ensureDefaultModel, fetchDefaultModel, fetchModelById, listAdminModels, listPublicModels, normalizeModelCategory, sanitizeBaseUrl, setDefaultModel } from "./models";
+import { ensureDefaultModel, fetchDefaultModelForPlan, fetchModelByIdForPlan, listAdminModels, listPublicModelsForPlan, normalizeModelCategory, normalizePlanTier, sanitizeBaseUrl, setDefaultModel, setModelAccess } from "./models";
 
 const app = new Hono<{ Bindings: Env; Variables: { user: User | null } }>();
 const ALLOWED_EVAL_TOOLS = new Set(["FMEA"]);
@@ -50,24 +50,25 @@ const isValidHttpUrl = (value: string) => {
 const resolveTextModel = async (
   env: Env,
   requestedId: string | null,
-  storedId: string | null
+  storedId: string | null,
+  plan: "free" | "pro" | "max"
 ): Promise<{ model: ModelRuntimeConfig | null; error?: string }> => {
   if (requestedId) {
-    const model = await fetchModelById(env, requestedId, "text");
+    const model = await fetchModelByIdForPlan(env, requestedId, plan, "text");
     if (!model) {
-      return { model: null, error: "指定模型不存在或不可用" };
+      return { model: null, error: "指定模型不存在或无权限使用" };
     }
     return { model };
   }
   if (storedId) {
-    const model = await fetchModelById(env, storedId, "text");
+    const model = await fetchModelByIdForPlan(env, storedId, plan, "text");
     if (model) {
       return { model };
     }
   }
-  const fallback = await fetchDefaultModel(env, "text");
+  const fallback = await fetchDefaultModelForPlan(env, "text", plan);
   if (!fallback) {
-    return { model: null, error: "未配置默认文本生成模型，请联系管理员" };
+    return { model: null, error: "当前账号暂无可用文本生成模型，请联系管理员" };
   }
   return { model: fallback };
 };
@@ -113,16 +114,17 @@ app.post("/api/auth/register", async (c) => {
   const { hash, salt } = await hashPassword(password);
   const userId = crypto.randomUUID();
   const role = adminKey && c.env.ADMIN_BOOTSTRAP_KEY && adminKey === c.env.ADMIN_BOOTSTRAP_KEY ? "admin" : "user";
+  const plan = "free";
   await c.env.DB.prepare(
-    "INSERT INTO users (id, email, password_hash, password_salt, role, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    "INSERT INTO users (id, email, password_hash, password_salt, role, plan, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
   )
-    .bind(userId, email, hash, salt, role, nowIso())
+    .bind(userId, email, hash, salt, role, plan, nowIso())
     .run();
 
   const session = await createSession(c.env, userId);
   setSessionCookie(c, session.token, session.expiresAt, c.env);
 
-  return c.json({ id: userId, email, role });
+  return c.json({ id: userId, email, role, plan });
 });
 
 app.post("/api/auth/login", async (c) => {
@@ -135,7 +137,7 @@ app.post("/api/auth/login", async (c) => {
   }
 
   const userRow = await c.env.DB.prepare(
-    "SELECT id, email, role, password_hash, password_salt FROM users WHERE email = ?"
+    "SELECT id, email, role, plan, password_hash, password_salt FROM users WHERE email = ?"
   )
     .bind(email)
     .first();
@@ -155,7 +157,7 @@ app.post("/api/auth/login", async (c) => {
 
   const session = await createSession(c.env, userRow.id as string);
   setSessionCookie(c, session.token, session.expiresAt, c.env);
-  return c.json({ id: userRow.id, email: userRow.email, role: userRow.role });
+  return c.json({ id: userRow.id, email: userRow.email, role: userRow.role, plan: userRow.plan ?? "free" });
 });
 
 app.post("/api/auth/logout", async (c) => {
@@ -196,7 +198,9 @@ app.get("/api/templates/:id", requireAuth, async (c) => {
 });
 
 app.get("/api/models", requireAuth, async (c) => {
-  const result = await listPublicModels(c.env);
+  const user = c.get("user");
+  const plan = (user?.plan ?? "free") as "free" | "pro" | "max";
+  const result = await listPublicModelsForPlan(c.env, plan);
   return c.json(result);
 });
 
@@ -213,6 +217,16 @@ app.post("/api/admin/models", requireAdmin, async (c) => {
   const apiKey = typeof body?.apiKey === "string" ? body.apiKey.trim() : "";
   const category = normalizeModelCategory(body?.category);
   const isDefault = body?.isDefault === true;
+  const allowedPlansRaw = Array.isArray(body?.allowedPlans) ? body.allowedPlans : null;
+  const allowedPlans = allowedPlansRaw
+    ? Array.from(
+        new Set(
+          allowedPlansRaw
+            .map((plan: unknown) => normalizePlanTier(plan))
+            .filter((plan): plan is "free" | "pro" | "max" => Boolean(plan))
+        )
+      )
+    : ["free"];
 
   if (!name || !modelName || !baseUrlRaw || !apiKey || !category) {
     return c.json({ error: "模型名称、类别、Base URL 与 API Key 不能为空" }, 400);
@@ -229,6 +243,8 @@ app.post("/api/admin/models", requireAdmin, async (c) => {
   )
     .bind(id, name, category, modelName, baseUrl, apiKey, isDefault ? 1 : 0, now, now)
     .run();
+
+  await setModelAccess(c.env, id, allowedPlans.length > 0 ? allowedPlans : ["free"]);
 
   if (isDefault) {
     await setDefaultModel(c.env, category, id);
@@ -257,6 +273,16 @@ app.patch("/api/admin/models/:id", requireAdmin, async (c) => {
   const apiKeyRaw = typeof body?.apiKey === "string" ? body.apiKey.trim() : null;
   const category = body?.category ? normalizeModelCategory(body.category) : null;
   const isDefault = typeof body?.isDefault === "boolean" ? body.isDefault : null;
+  const allowedPlansRaw = Array.isArray(body?.allowedPlans) ? body.allowedPlans : null;
+  const allowedPlans = allowedPlansRaw
+    ? Array.from(
+        new Set(
+          allowedPlansRaw
+            .map((plan: unknown) => normalizePlanTier(plan))
+            .filter((plan): plan is "free" | "pro" | "max" => Boolean(plan))
+        )
+      )
+    : null;
 
   if (body?.name !== undefined && !name) {
     return c.json({ error: "模型名称不能为空" }, 400);
@@ -300,6 +326,10 @@ app.patch("/api/admin/models/:id", requireAdmin, async (c) => {
       modelId
     )
     .run();
+
+  if (allowedPlans) {
+    await setModelAccess(c.env, modelId, allowedPlans.length > 0 ? allowedPlans : ["free"]);
+  }
 
   if (nextIsDefault) {
     await setDefaultModel(c.env, nextCategory, modelId);
@@ -524,6 +554,8 @@ app.delete("/api/projects/:id", requireAuth, async (c) => {
   if (!project) {
     return c.json({ error: "项目不存在" }, 404);
   }
+  const user = c.get("user");
+  const plan = (user?.plan ?? "free") as "free" | "pro" | "max";
 
   const fileRows = await c.env.DB.prepare(
     "SELECT file_key, text_key FROM project_files WHERE project_id = ?"
@@ -624,7 +656,7 @@ app.patch("/api/projects/:id/inputs", requireAuth, async (c) => {
     return c.json({ error: "流程步骤格式不正确" }, 400);
   }
   if (hasTextModelId && textModelId) {
-    const model = await fetchModelById(c.env, textModelId, "text");
+    const model = await fetchModelByIdForPlan(c.env, textModelId, plan, "text");
     if (!model) {
       return c.json({ error: "选择的模型不存在或不可用" }, 400);
     }
@@ -737,6 +769,8 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
   const body = await c.req.json().catch(() => null);
   let templateContent = typeof body?.templateContent === "string" ? body.templateContent : null;
   const requestedTextModelId = typeof body?.textModelId === "string" ? body.textModelId.trim() : null;
+  const user = c.get("user");
+  const plan = (user?.plan ?? "free") as "free" | "pro" | "max";
 
   const inputs = await c.env.DB.prepare(
     "SELECT scope, background, objective, risk_method, eval_tool, process_steps, template_id, text_model_id FROM project_inputs WHERE project_id = ?"
@@ -788,7 +822,8 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
   const { model: textModel, error: modelError } = await resolveTextModel(
     c.env,
     requestedTextModelId,
-    storedTextModelId
+    storedTextModelId,
+    plan
   );
   if (!textModel) {
     return c.json({ error: modelError ?? "模型不可用" }, 400);
@@ -798,7 +833,7 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
       .bind(textModel.id, nowIso(), projectId)
       .run();
   }
-  const embeddingModel = await fetchDefaultModel(c.env, "embedding");
+  const embeddingModel = await fetchDefaultModelForPlan(c.env, "embedding", plan);
 
   const versionRow = await c.env.DB.prepare(
     "SELECT MAX(version) as max_version FROM reports WHERE project_id = ?"
@@ -912,7 +947,8 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
   const { model: textModel, error: modelError } = await resolveTextModel(
     c.env,
     requestedTextModelId,
-    storedTextModelId
+    storedTextModelId,
+    plan
   );
   if (!textModel) {
     return c.json({ error: modelError ?? "模型不可用" }, 400);
@@ -922,7 +958,7 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
       .bind(textModel.id, nowIso(), projectId)
       .run();
   }
-  const embeddingModel = await fetchDefaultModel(c.env, "embedding");
+  const embeddingModel = await fetchDefaultModelForPlan(c.env, "embedding", plan);
 
   const files = await c.env.DB.prepare(
     "SELECT type, text_key, filename FROM project_files WHERE project_id = ?"

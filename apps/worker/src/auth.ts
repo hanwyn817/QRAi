@@ -59,7 +59,7 @@ export async function getUserFromSession(env: Env, request: Request): Promise<Us
     return null;
   }
   const session = await env.DB.prepare(
-    "SELECT s.expires_at as expires_at, u.id as id, u.email as email, u.role as role FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ?"
+    "SELECT s.expires_at as expires_at, u.id as id, u.email as email, u.role as role, u.plan as plan FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ?"
   )
     .bind(token)
     .first();
@@ -74,7 +74,8 @@ export async function getUserFromSession(env: Env, request: Request): Promise<Us
   return {
     id: session.id as string,
     email: session.email as string,
-    role: (session.role as "admin" | "user") ?? "user"
+    role: (session.role as "admin" | "user") ?? "user",
+    plan: (session.plan as "free" | "pro" | "max") ?? "free"
   };
 }
 

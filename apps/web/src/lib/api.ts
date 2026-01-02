@@ -33,22 +33,28 @@ async function request<T>(path: string, options?: RequestInit): Promise<ApiRespo
 
 export const api = {
   async register(email: string, password: string, adminKey?: string) {
-    return request<{ id: string; email: string; role: string }>("/api/auth/register", {
+    return request<{ id: string; email: string; role: string; plan?: "free" | "pro" | "max" }>(
+      "/api/auth/register",
+      {
       method: "POST",
       body: JSON.stringify({ email, password, adminKey })
-    });
+      }
+    );
   },
   async login(email: string, password: string) {
-    return request<{ id: string; email: string; role: string }>("/api/auth/login", {
+    return request<{ id: string; email: string; role: string; plan?: "free" | "pro" | "max" }>(
+      "/api/auth/login",
+      {
       method: "POST",
       body: JSON.stringify({ email, password })
-    });
+      }
+    );
   },
   async logout() {
     return request<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
   },
   async getMe() {
-    return request<{ user: { id: string; email: string; role: "admin" | "user" } }>("/api/me");
+    return request<{ user: { id: string; email: string; role: "admin" | "user"; plan?: "free" | "pro" | "max" } }>("/api/me");
   },
   async listTemplates() {
     return request<{
@@ -209,6 +215,7 @@ export const api = {
         is_default: boolean;
         is_active: boolean;
         updated_at: string;
+        allowed_plans: Array<"free" | "pro" | "max">;
       }>;
     }>("/api/admin/models");
   },
@@ -219,6 +226,7 @@ export const api = {
     baseUrl: string;
     apiKey: string;
     isDefault?: boolean;
+    allowedPlans?: Array<"free" | "pro" | "max">;
   }) {
     return request<{ id: string }>("/api/admin/models", {
       method: "POST",
@@ -234,6 +242,7 @@ export const api = {
       baseUrl?: string;
       apiKey?: string;
       isDefault?: boolean;
+      allowedPlans?: Array<"free" | "pro" | "max">;
     }
   ) {
     return request<{ ok: boolean }>(`/api/admin/models/${id}`, {

@@ -11,6 +11,7 @@ export type Env = {
 };
 
 export type ModelCategory = "text" | "embedding" | "rerank";
+export type PlanTier = "free" | "pro" | "max";
 
 export type ModelRuntimeConfig = {
   id: string;
@@ -25,6 +26,7 @@ export type User = {
   id: string;
   email: string;
   role: "admin" | "user";
+  plan?: PlanTier;
 };
 
 export type AuthUser = User & { password_hash: string; password_salt: string };
