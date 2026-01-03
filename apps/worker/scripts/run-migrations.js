@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const args = process.argv.slice(2);
@@ -38,7 +38,42 @@ for (let i = 0; i < args.length; i += 1) {
   }
 }
 
-const dbName = options.db ?? process.env.D1_DATABASE_NAME ?? (options.local ? "qrai" : null);
+function loadDbNameFromWrangler() {
+  const candidates = [
+    resolve(process.cwd(), "wrangler.toml"),
+    resolve(new URL("..", import.meta.url).pathname, "..", "wrangler.toml")
+  ];
+  const path = candidates.find((candidate) => existsSync(candidate));
+  if (!path) {
+    return null;
+  }
+  const lines = readFileSync(path, "utf8").split(/\r?\n/);
+  let inD1Block = false;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+    if (line.startsWith("[[")) {
+      inD1Block = line === "[[d1_databases]]";
+      continue;
+    }
+    if (!inD1Block) {
+      continue;
+    }
+    const match = line.match(/^database_name\s*=\s*"([^"]+)"/);
+    if (match) {
+      return match[1];
+    }
+  }
+  return null;
+}
+
+const dbName =
+  options.db ??
+  process.env.D1_DATABASE_NAME ??
+  loadDbNameFromWrangler() ??
+  (options.local ? "qrai" : null);
 if (!dbName) {
   console.error("Missing database name. Use --db or set D1_DATABASE_NAME.");
   process.exit(1);

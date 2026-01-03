@@ -10,12 +10,12 @@ REPORT_TIMEZONE = "Asia/Shanghai"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "qrai"
-database_id = "REPLACE_WITH_D1_ID"
+database_name = "qrai-db"
+database_id = "f71d6def-2852-47af-ae8b-c36f2745afa6"
 
 [[r2_buckets]]
 binding = "BUCKET"
-bucket_name = "qrai-files"
+bucket_name = "qrai-bucket"
 
 # Optional: bootstrap admin
 # [vars]
