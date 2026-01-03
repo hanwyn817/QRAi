@@ -30,6 +30,7 @@ export default function AdminTemplates() {
   const [editDescription, setEditDescription] = useState("");
   const [editContent, setEditContent] = useState("");
   const editSectionRef = useRef<HTMLDivElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -156,6 +157,63 @@ export default function AdminTemplates() {
     await loadTemplates();
   };
 
+  const handleExport = async () => {
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    const result = await api.exportTemplates();
+    setLoading(false);
+    if (!result.data) {
+      setError(result.error ?? "模板导出失败");
+      return;
+    }
+    const payload = { templates: result.data.templates };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `templates-export-${new Date().toISOString().slice(0, 10)}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setNotice("模板已导出");
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = event.target.files?.[0] ?? null;
+    event.target.value = "";
+    if (!selected) {
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    let payload: unknown = null;
+    try {
+      const text = await selected.text();
+      payload = JSON.parse(text);
+    } catch {
+      setLoading(false);
+      setError("导入文件不是有效的 JSON");
+      return;
+    }
+    const templates = Array.isArray((payload as { templates?: unknown }).templates)
+      ? ((payload as { templates: Array<{ name: string; description?: string | null; content: string }> }).templates ?? [])
+      : null;
+    if (!templates) {
+      setLoading(false);
+      setError("导入文件缺少 templates 字段");
+      return;
+    }
+    const result = await api.importTemplates({ templates });
+    setLoading(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setNotice(`模板已导入（${result.data?.count ?? 0} 条）`);
+    await loadTemplates();
+  };
+
   return (
     <div className="admin-templates">
       <header className="admin-templates-header">
@@ -163,9 +221,30 @@ export default function AdminTemplates() {
           <h2>模板管理</h2>
           <p className="muted">上传、维护并管理评估报告模板。</p>
         </div>
-        <div className="admin-templates-meta">
-          <span className="muted">模板总数</span>
-          <strong>{templates.length}</strong>
+        <div className="admin-templates-side">
+          <div className="admin-templates-meta">
+            <span className="muted">模板总数</span>
+            <strong>{templates.length}</strong>
+          </div>
+          <div className="admin-actions">
+            <button className="mini-button" onClick={handleExport} disabled={loading}>
+              导出
+            </button>
+            <button
+              className="mini-button"
+              onClick={() => importInputRef.current?.click()}
+              disabled={loading}
+            >
+              导入
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json"
+              onChange={handleImportFile}
+              style={{ display: "none" }}
+            />
+          </div>
         </div>
       </header>
 

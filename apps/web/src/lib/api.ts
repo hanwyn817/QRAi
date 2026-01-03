@@ -80,6 +80,25 @@ export const api = {
       body: form
     });
   },
+  async exportTemplates() {
+    return request<{
+      templates: Array<{
+        name: string;
+        description: string | null;
+        content: string;
+        created_at?: string;
+        updated_at?: string;
+      }>;
+    }>("/api/admin/templates/export");
+  },
+  async importTemplates(data: {
+    templates: Array<{ name: string; description?: string | null; content: string }>;
+  }) {
+    return request<{ count: number }>("/api/admin/templates/import", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+  },
   async updateTemplate(id: string, data: { name?: string; description?: string; content?: string }) {
     return request<{ ok: boolean }>(`/api/admin/templates/${id}`, {
       method: "PATCH",
@@ -253,6 +272,37 @@ export const api = {
         allowed_plans: Array<"free" | "pro" | "max">;
       }>;
     }>("/api/admin/models");
+  },
+  async exportAdminModels() {
+    return request<{
+      models: Array<{
+        name: string;
+        category: "text" | "embedding" | "rerank";
+        model_name: string;
+        base_url: string;
+        api_key: string;
+        is_default: boolean;
+        is_active?: boolean;
+        allowed_plans: Array<"free" | "pro" | "max">;
+      }>;
+    }>("/api/admin/models/export");
+  },
+  async importAdminModels(data: {
+    models: Array<{
+      name: string;
+      category: "text" | "embedding" | "rerank";
+      model_name: string;
+      base_url: string;
+      api_key: string;
+      is_default?: boolean;
+      is_active?: boolean;
+      allowed_plans?: Array<"free" | "pro" | "max">;
+    }>;
+  }) {
+    return request<{ count: number }>("/api/admin/models/import", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
   },
   async createModel(data: {
     name: string;

@@ -300,6 +300,12 @@ button.danger {
   font-size: 0.95rem;
 }
 
+.admin-templates-side {
+  display: grid;
+  gap: 0.6rem;
+  justify-items: end;
+}
+
 .admin-templates-grid {
   display: grid;
   gap: 1.6rem;

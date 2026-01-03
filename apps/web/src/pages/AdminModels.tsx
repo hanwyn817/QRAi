@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 
 const CATEGORY_OPTIONS = [
@@ -44,6 +44,7 @@ function formatMinute(value?: string | null) {
 
 export default function AdminModels() {
   const [models, setModels] = useState<AdminModel[]>([]);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const [form, setForm] = useState({
     name: "",
     category: "text" as const,
@@ -252,6 +253,77 @@ export default function AdminModels() {
     await loadModels();
   };
 
+  const handleExport = async () => {
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    const result = await api.exportAdminModels();
+    setLoading(false);
+    if (!result.data) {
+      setError(result.error ?? "模型导出失败");
+      return;
+    }
+    const payload = { models: result.data.models };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `models-export-${new Date().toISOString().slice(0, 10)}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setNotice("模型已导出");
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = event.target.files?.[0] ?? null;
+    event.target.value = "";
+    if (!selected) {
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    let payload: unknown = null;
+    try {
+      const text = await selected.text();
+      payload = JSON.parse(text);
+    } catch {
+      setLoading(false);
+      setError("导入文件不是有效的 JSON");
+      return;
+    }
+    const rawModels = Array.isArray((payload as { models?: unknown }).models)
+      ? ((payload as { models: Array<Record<string, unknown>> }).models ?? [])
+      : null;
+    if (!rawModels) {
+      setLoading(false);
+      setError("导入文件缺少 models 字段");
+      return;
+    }
+    const modelsPayload = rawModels.map((model) => ({
+      name: typeof model.name === "string" ? model.name : "",
+      category: model.category as "text" | "embedding" | "rerank",
+      model_name: typeof model.model_name === "string" ? model.model_name : typeof model.modelName === "string" ? model.modelName : "",
+      base_url: typeof model.base_url === "string" ? model.base_url : typeof model.baseUrl === "string" ? model.baseUrl : "",
+      api_key: typeof model.api_key === "string" ? model.api_key : typeof model.apiKey === "string" ? model.apiKey : "",
+      is_default: typeof model.is_default === "boolean" ? model.is_default : typeof model.isDefault === "boolean" ? model.isDefault : undefined,
+      is_active: typeof model.is_active === "boolean" ? model.is_active : typeof model.isActive === "boolean" ? model.isActive : undefined,
+      allowed_plans: Array.isArray(model.allowed_plans)
+        ? (model.allowed_plans as Array<"free" | "pro" | "max">)
+        : Array.isArray(model.allowedPlans)
+          ? (model.allowedPlans as Array<"free" | "pro" | "max">)
+          : undefined
+    }));
+    const result = await api.importAdminModels({ models: modelsPayload });
+    setLoading(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setNotice(`模型已导入（${result.data?.count ?? 0} 条）`);
+    await loadModels();
+  };
+
   return (
     <div className="admin-models">
       <header className="admin-templates-header">
@@ -259,9 +331,30 @@ export default function AdminModels() {
           <h2>模型管理</h2>
           <p className="muted">管理 OpenAI 兼容模型，按类别设置默认模型。</p>
         </div>
-        <div className="admin-templates-meta">
-          <span className="muted">模型总数</span>
-          <strong>{activeModels.length}</strong>
+        <div className="admin-templates-side">
+          <div className="admin-templates-meta">
+            <span className="muted">模型总数</span>
+            <strong>{activeModels.length}</strong>
+          </div>
+          <div className="admin-actions">
+            <button className="mini-button" onClick={handleExport} disabled={loading}>
+              导出
+            </button>
+            <button
+              className="mini-button"
+              onClick={() => importInputRef.current?.click()}
+              disabled={loading}
+            >
+              导入
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json"
+              onChange={handleImportFile}
+              style={{ display: "none" }}
+            />
+          </div>
         </div>
       </header>
 
