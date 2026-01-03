@@ -8,8 +8,9 @@
     "deploy": "wrangler deploy",
     "build": "wrangler deploy --dry-run",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "d1:local:init": "wrangler d1 execute qrai --local --file migrations/0001_init.sql",
-    "d1:local:migrate": "wrangler d1 execute qrai --local --file migrations/0002_report_usage.sql"
+    "d1:local:init": "wrangler d1 execute qrai --local --file migrations/0000_baseline.sql",
+    "d1:local:migrate": "wrangler d1 execute qrai --local --file migrations/0002_report_usage.sql",
+    "d1:prod:init": "wrangler d1 execute qrai --file migrations/0000_baseline.sql"
   },
   "dependencies": {
     "hono": "^4.5.6",

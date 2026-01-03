@@ -3,9 +3,6 @@ export type Env = {
   BUCKET: R2Bucket;
   APP_ENV: string;
   APP_ORIGIN: string;
-  EXPORT_RENDER_URL?: string;
-  EXPORT_RENDER_API_KEY?: string;
-  EXPORT_RENDER_MODE?: string;
   ADMIN_BOOTSTRAP_KEY?: string;
   REPORT_TIMEZONE?: string;
 };

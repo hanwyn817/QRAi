@@ -2,7 +2,7 @@
 
 面向药品生产企业质量管理人员的风险评估报告生成工具，支持多用户、多模板、报告版本管理，并输出 Markdown / Word。
 
-## 技术架构
+## 1 技术架构
 
 - 前端：Cloudflare Pages（Vite + React）
 - 后端：Cloudflare Workers（Hono）
@@ -10,19 +10,25 @@
 - 文件存储：Cloudflare R2（生产环境）
 - 导出服务：Worker 本地渲染（DOCX）
 
-## 本地开发（不依赖 Cloudflare 云端服务）
+## 2 本地开发（不依赖 Cloudflare 云端服务）
 
 本地开发使用 Wrangler 的本地模拟（D1 + R2 本地持久化），不需要创建/调用 Cloudflare 云端服务。
 
-### 1) 安装依赖
+### 2.1 安装依赖
 
 ```bash
 npm install
 ```
 
-### 2) 配置后端本地变量
+### 2.2 配置后端本地变量
 
-在 `apps/worker/` 下创建 `.dev.vars`：
+在 `apps/worker/` 下创建 `.dev.vars`（建议直接复制模板）：
+
+```bash
+cp apps/worker/.env.example apps/worker/.dev.vars
+```
+
+然后编辑 `apps/worker/.dev.vars`：
 
 ```bash
 APP_ENV=local
@@ -32,15 +38,18 @@ REPORT_TIMEZONE=Asia/Shanghai
 ```
 
 说明：
-- `APP_ENV=local` 会禁用 Secure Cookie，便于本地 http 调试。
+- `APP_ENV=local` 会禁用 Secure Cookie，便于本地 http 调试（本地保持 `local`）。
+- `APP_ORIGIN` 是前端地址（用于 CORS 与 Cookie）。本地默认 `http://localhost:5173`；只有当前端端口/域名变了才需要改（例如 Vite 改成 3000，就写 `http://localhost:3000`）。
+- `ADMIN_BOOTSTRAP_KEY` 用于创建管理员账号（注册页面有“管理员密钥”输入框），本地可随便设置一个字符串。
+- `REPORT_TIMEZONE` 是报告时间的时区，默认 `Asia/Shanghai`，不需要就不要改。
 
-### 3) 初始化本地 D1
+### 2.3 初始化本地 D1
 
 ```bash
 npm --workspace apps/worker run d1:local:init
 ```
 
-### 4) 启动后端（本地模拟）
+### 2.4 启动后端（本地模拟）
 
 ```bash
 npm run dev:worker:local
@@ -49,7 +58,7 @@ npm run dev:worker:local
 说明：
 - 脚本会使用 `wrangler dev --local --persist-to .wrangler/state`，本地持久化 D1/R2 数据。
 
-### 5) 配置前端 API 地址
+### 2.5 配置前端 API 地址
 
 在 `apps/web/` 下创建 `.env`：
 
@@ -57,31 +66,104 @@ npm run dev:worker:local
 VITE_API_BASE=http://localhost:8787
 ```
 
-### 6) 启动前端
+### 2.6 启动前端
 
 ```bash
 npm run dev:web
 ```
 
-### 7) 初始化模型
+### 2.7 初始化模型
 
-使用管理员账号登录后，在「模型管理」中新增 OpenAI 兼容模型，并为每个类别设置默认模型。
+1. 打开前端注册页，填写“管理员密钥”为 `ADMIN_BOOTSTRAP_KEY`，完成管理员创建。
+2. 以管理员登录后，在「模型管理」中新增 OpenAI 兼容模型，并为每个类别设置默认模型（需要 Base URL / API Key / 模型标识）。
 
-## 生产部署（Cloudflare）
+## 3 生产部署（Cloudflare）
 
-1. 创建 D1 数据库与 R2 Bucket，并将 ID/名称写入 `apps/worker/wrangler.toml`。
-2. 设置 Workers 环境变量（如 `APP_ORIGIN`、`ADMIN_BOOTSTRAP_KEY` 等）。
-3. 部署 Workers：
+### 3.1 前置准备
+
+- 安装并登录 Wrangler：`npm i -g wrangler`，`wrangler login`
+- 确保 Cloudflare 账号已开通 Workers / D1 / R2 / Pages
+
+### 3.2 创建 D1 与 R2 资源
+
+```bash
+wrangler d1 create qrai
+wrangler r2 bucket create qrai-bucket
+```
+
+将输出的 `database_id` 与 `bucket_name` 写入 `apps/worker/wrangler.toml`：
+
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "qrai"
+database_id = "你的真实D1 ID"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "qrai-bucket"
+```
+
+### 3.3 初始化数据库（生产首次部署只需一次）
+
+```bash
+npm --workspace apps/worker run d1:prod:init
+```
+
+说明：
+- 使用合并后的基线脚本 `apps/worker/migrations/0000_baseline.sql`，一次执行即可完成初始化。
+- 如果以后新增了字段/表：
+  1. 在 `apps/worker/migrations/` 新建一个递增编号的 SQL 文件（例如 `0007_add_xxx.sql`）。
+  2. 把需要的 `ALTER TABLE` / `CREATE TABLE` 写进去。
+  3. 线上执行一次：`wrangler d1 execute qrai --file apps/worker/migrations/0007_add_xxx.sql`。
+
+### 3.4 配置 Workers 环境变量与密钥
+
+推荐使用 Secrets 管理敏感信息（用于生产环境）：
+
+```bash
+wrangler secret put ADMIN_BOOTSTRAP_KEY --env production
+```
+
+执行后会提示你输入密钥，直接在终端输入（例如 `123456`）并回车即可。
+
+非敏感变量建议写入 `apps/worker/wrangler.toml` 的 `[env.production].vars`（如果没有该区块就手动新增）：
+
+```toml
+[env.production]
+vars = { APP_ENV = "production", APP_ORIGIN = "https://your-domain.com" }
+```
+
+### 3.5 部署 Workers
 
 ```bash
 npm --workspace apps/worker run deploy
 ```
 
-4. 部署 Pages（构建输出目录 `apps/web/dist`）。
+部署成功后会输出 Worker 的访问域名（通常是 `https://<name>.<account>.workers.dev`），下一步会用它配置前端的 `VITE_API_BASE`。
 
-## 配置文件说明（重点）
+### 3.6 部署 Pages（前端）
 
-### 1) `apps/worker/.env.example`
+在 Cloudflare Pages 新建项目并关联仓库，构建配置：
+
+- 构建命令：`npm --workspace apps/web run build`
+- 输出目录：`apps/web/dist`
+- 环境变量：`VITE_API_BASE=https://your-worker-domain`
+
+首次部署完成后会得到一个 Pages 域名（例如 `https://xxx.pages.dev`）。
+拿到域名后：
+1. 把该域名写入 `apps/worker/wrangler.toml` 的 `[env.production].vars` 里 `APP_ORIGIN`。
+2. 重新部署 Worker（执行 `npm --workspace apps/worker run deploy`）。
+3. 如果你绑定了自定义域名，记得把 `APP_ORIGIN` 更新为自定义域名并再次部署 Worker。
+
+### 3.7 初始化管理员与模型
+
+1. 访问前端注册页，在“管理员密钥”里填写 `ADMIN_BOOTSTRAP_KEY`，完成管理员初始化。
+2. 以管理员登录后，进入「模型管理」配置 OpenAI 兼容模型，并为每类模型设置默认值。
+
+## 4 配置文件说明（重点）
+
+### 4.1 `apps/worker/.env.example`
 
 作用：
 - 这是 **环境变量模板**，用于告诉你 Worker 需要哪些配置项。
@@ -93,13 +175,21 @@ npm --workspace apps/worker run deploy
 如何使用：
 - 本地开发：复制为 `.dev.vars`，内容为 `KEY=VALUE` 形式（Wrangler 会自动读取）。
 - 生产环境：不要直接把敏感信息写进仓库；用 Cloudflare Dashboard 或 `wrangler secret put` 设置。
+- 模型配置（Base URL / API Key / 模型标识）通过管理后台维护，不在 `.env` 中配置。
+- `ADMIN_BOOTSTRAP_KEY` 是敏感密钥，**不要写进 `apps/worker/wrangler.toml` 并提交到仓库**；请用 Dashboard 或 `wrangler secret put` 配置。
+
+常见字段说明：
+- `APP_ENV`：运行环境标记；本地用 `local`，生产用 `production`（写在 `[env.production].vars` 或 Dashboard）。
+- `APP_ORIGIN`：前端访问地址；本地默认用 `http://localhost:5173`，通常**不需要改**。生产环境需要先在 Pages 首次部署拿到域名（如 `https://xxx.pages.dev`），再把这个域名写到 `apps/worker/wrangler.toml` 的 `[env.production].vars` 或 Cloudflare Dashboard，并重新部署 Worker（多个域名用英文逗号分隔）。
+- `ADMIN_BOOTSTRAP_KEY`：初始化管理员用的一次性“钥匙”；第一次注册管理员时需要，之后可更换或留空。
+- `REPORT_TIMEZONE`：报告显示时间的时区；不改就用 `Asia/Shanghai`。
 
 示例（本地）：
 ```bash
 cp apps/worker/.env.example apps/worker/.dev.vars
 ```
 
-### 2) `apps/worker/wrangler.toml`
+### 4.2 `apps/worker/wrangler.toml`
 
 作用：
 - **Worker 构建与部署的核心配置文件**，包括入口文件、兼容日期、D1/R2 绑定、默认变量等。
@@ -134,28 +224,28 @@ bucket_name = "你的真实R2名称"
 vars = { APP_ENV = "production", APP_ORIGIN = "https://your-domain.com" }
 ```
 
-## 管理员账号
+## 5 管理员账号
 
 首次注册时传入 `ADMIN_BOOTSTRAP_KEY` 即可初始化管理员账号。后续注册默认为普通用户。
 
-## 模板规则
+## 6 模板规则
 
 - 模板文件为 Markdown。
 - 用户可编辑模板，但编辑结果不会回写模板库，仅对本次报告生效。
 - 每次生成报告会创建“模板快照”，可追溯。
 
-## 目录结构
+## 7 目录结构
 
 - `apps/web` 前端
 - `apps/worker` 后端
 - `apps/worker/migrations` D1 初始化脚本
 - `apps/worker/resources` 默认模板示例
 
-## 扩展点
+## 8 扩展点
 
 - 联网检索：`apps/worker/src/search.ts` 中实现 `SearchProvider`。
 - 向量检索/RAG：可接入 Cloudflare Vectorize 或其他服务。
 
-## TODO
+## 9 TODO
 
 - 增加用户用量管理
