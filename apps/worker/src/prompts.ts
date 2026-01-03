@@ -297,10 +297,10 @@ ${input.templateContent}
 风险识别清单（含序号）：
 ${input.riskItemsJson}
 
-风险评价表（含序号、RPN、等级）：
+风险评价表（含序号、RPN、等级等）：
 ${input.scoredItemsJson}
 
-控制措施（含序号）：
+控制措施表（含序号、控制措施、责任角色、责任部门、计划完成日期）：
 ${input.actionsJson}
 `;
 }

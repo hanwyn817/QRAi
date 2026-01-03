@@ -43,7 +43,7 @@ export function summarizeTemplateRequirements(templateContent: string | null): s
 export async function buildWorkflowContext(
   embeddingModel: ModelRuntimeConfig | null,
   input: ReportInput,
-  evidenceTopK = 4,
+  evidenceTopK = 8,
   options?: { onStage?: (message: string) => void }
 ): Promise<WorkflowContext> {
   const scope = input.scope?.trim() || "（未填写）";
@@ -83,6 +83,7 @@ export async function buildWorkflowContext(
   };
 }
 
+
 async function buildEvidenceChunks(
   embeddingModel: ModelRuntimeConfig | null,
   sopTexts: string[],
@@ -92,7 +93,16 @@ async function buildEvidenceChunks(
   options?: { onStage?: (message: string) => void }
 ): Promise<EvidenceChunk[]> {
   if (hasEmbeddingConfig(embeddingModel)) {
-    return await buildEmbeddingEvidence(embeddingModel, sopTexts, literatureTexts, query, topK, options);
+    try {
+      return await buildEmbeddingEvidence(embeddingModel, sopTexts, literatureTexts, query, topK, options);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      options?.onStage?.(`向量检索失败，已降级为关键词检索：${message}`);
+      const queryTokens = extractKeywords(query);
+      const sopChunks = collectChunks("sop", sopTexts, queryTokens, topK);
+      const literatureChunks = collectChunks("literature", literatureTexts, queryTokens, topK);
+      return [...sopChunks, ...literatureChunks];
+    }
   }
   options?.onStage?.("关键词检索中...");
   const queryTokens = extractKeywords(query);
@@ -114,14 +124,34 @@ async function buildEmbeddingEvidence(
   options?: { onStage?: (message: string) => void }
 ): Promise<EvidenceChunk[]> {
   options?.onStage?.("向量化中...");
-  const queryEmbedding = await getEmbeddings(embeddingModel, [query]);
-  if (queryEmbedding.length === 0) {
+  const queryVariants = buildQueryVariants(query);
+  const queryEmbeddings = await getEmbeddings(embeddingModel, queryVariants);
+  if (queryEmbeddings.length === 0) {
     return [];
   }
-  const [vector] = queryEmbedding;
+  const dim = queryEmbeddings[0]?.length ?? 0;
+  options?.onStage?.(`查询向量数量：${queryEmbeddings.length}，向量维度：${dim}`);
   options?.onStage?.("向量检索中...");
-  const sopChunks = await collectChunksByEmbedding(embeddingModel, "sop", sopTexts, vector, topK);
-  const literatureChunks = await collectChunksByEmbedding(embeddingModel, "literature", literatureTexts, vector, topK);
+  const queryTokens = extractKeywords(query);
+  const queryPhrases = buildExactPhrases(query);
+  const sopChunks = await collectChunksByEmbedding(
+    embeddingModel,
+    "sop",
+    sopTexts,
+    queryEmbeddings,
+    topK,
+    queryTokens,
+    queryPhrases
+  );
+  const literatureChunks = await collectChunksByEmbedding(
+    embeddingModel,
+    "literature",
+    literatureTexts,
+    queryEmbeddings,
+    topK,
+    queryTokens,
+    queryPhrases
+  );
   return [...sopChunks, ...literatureChunks];
 }
 
@@ -129,29 +159,96 @@ async function collectChunksByEmbedding(
   embeddingModel: ModelRuntimeConfig | null,
   source: "sop" | "literature",
   texts: string[],
-  queryEmbedding: number[],
-  topK: number
+  queryEmbeddings: number[][],
+  topK: number,
+  queryTokens: string[] = [],
+  queryPhrases: string[] = []
 ): Promise<EvidenceChunk[]> {
   const chunks: EvidenceChunk[] = [];
-  const chunkTexts: string[] = [];
+  const rawChunkTexts: string[] = [];
+
+  // NOTE: 对超长文档，默认 chunkText 的 maxChunks=48 会导致仅覆盖前半段文本，后续章节永远无法被召回。
+  // 这里对向量检索路径提高覆盖上限，并在 embedding 前做一次廉价的关键词预筛选以控制成本。
   for (const text of texts) {
-    for (const chunk of chunkText(text)) {
-      chunkTexts.push(chunk);
+    for (const chunk of chunkText(text, 800, 200, 240)) {
+      rawChunkTexts.push(chunk);
     }
   }
-  if (chunkTexts.length === 0) {
+  if (rawChunkTexts.length === 0) {
     return [];
   }
+
+  // 预筛选：当 chunk 太多时，用关键词/短语先筛出候选集，再做 embedding 重排。
+  // 目标：既覆盖全文，又避免对几百个 chunk 全部做向量化导致成本和耗时上升。
+  const targetCandidates = Math.max(topK * 24, 120);
+  const maxCandidates = Math.min(targetCandidates, 240);
+  let chunkTexts = rawChunkTexts;
+  if (queryTokens.length > 0 && rawChunkTexts.length > maxCandidates) {
+    const scored = rawChunkTexts.map((content) => {
+      const lex = scoreChunk(content, queryTokens);
+      const phrase = queryPhrases.length > 0 ? exactPhraseBoost(content, queryPhrases) : 0;
+      // lex 为主，短语为辅（放大短语影响但不压过 lex）
+      const preScore = lex + phrase * 10;
+      return { content, preScore };
+    });
+    scored.sort((a, b) => b.preScore - a.preScore);
+    chunkTexts = scored.slice(0, maxCandidates).map((item) => item.content);
+  }
+
   const embeddings = await getEmbeddings(embeddingModel, chunkTexts);
   if (embeddings.length !== chunkTexts.length) {
     throw new Error("Embedding 返回数量不匹配");
   }
   embeddings.forEach((embedding, index) => {
-    const score = cosineSimilarity(queryEmbedding, embedding);
-    chunks.push({ source, content: chunkTexts[index], score });
+    const content = chunkTexts[index];
+    const embScore = maxCosineSimilarity(queryEmbeddings, embedding);
+    // 关键词命中率（0~1）：用于把“字面高度一致”的片段往前拉，避免被长查询语义稀释
+    const hitRate = keywordHitRate(content, queryTokens);
+    // 精确短语加权：若 chunk 直接包含 query 中的关键短语，则额外加分
+    const phraseBoost = exactPhraseBoost(content, queryPhrases);
+    // 混合评分（保持 embedding 为主，关键词/短语为辅）
+    const score = combineRetrievalScore(embScore, hitRate, phraseBoost);
+    chunks.push({ source, content, score });
   });
-  const sorted = chunks.sort((a, b) => b.score - a.score || b.content.length - a.content.length);
+  const sorted = chunks.sort((a, b) => b.score - a.score);
   return sorted.slice(0, topK);
+}
+
+function buildQueryVariants(query: string): string[] {
+  const normalized = query.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return [];
+  }
+  const variants: string[] = [normalized];
+  const sentences = normalized.split(/[。！？；;.!?]+/).map((part) => part.trim()).filter(Boolean);
+  for (const sentence of sentences) {
+    if (sentence.length >= 6) {
+      variants.push(sentence);
+    }
+  }
+  const chinese = normalized.match(/[\u4e00-\u9fff]+/g)?.join("") ?? "";
+  if (chinese.length >= 6) {
+    variants.push(chinese);
+  }
+  const english = normalized.match(/[A-Za-z0-9]+/g)?.join(" ") ?? "";
+  if (english.length >= 6) {
+    variants.push(english);
+  }
+  return Array.from(new Set(variants)).slice(0, 6);
+}
+
+function maxCosineSimilarity(vectors: number[][], embedding: number[]): number {
+  if (vectors.length === 0) {
+    return 0;
+  }
+  let best = -1;
+  for (const vector of vectors) {
+    const score = cosineSimilarity(vector, embedding);
+    if (score > best) {
+      best = score;
+    }
+  }
+  return best;
 }
 
 async function getEmbeddings(
@@ -175,9 +272,10 @@ async function getEmbeddings(
 
   keys.forEach((key, index) => {
     const cached = EMBEDDING_CACHE.get(key);
-    if (cached) {
+    if (cached && cached.length > 0) {
       results[index] = cached;
     } else {
+      // 缓存缺失或缓存为异常空向量时，重新请求
       missingInputs.push(inputs[index]);
       missingIndices.push(index);
     }
@@ -205,15 +303,39 @@ async function getEmbeddings(
     const data = (await response.json()) as {
       data?: Array<{ embedding?: number[] }>;
     };
-    const batchEmbeddings = data.data?.map((item) => item.embedding ?? []) ?? [];
+    const batchEmbeddings = data.data?.map((item) => item.embedding) ?? [];
     if (batchEmbeddings.length !== batch.length) {
       throw new Error("Embedding 返回缺失");
     }
+
+    // 校验：不得出现空向量或维度不一致（常见于接口返回格式不兼容/被代理改写）
+    let expectedDim: number | null = null;
+    for (let k = 0; k < batchEmbeddings.length; k += 1) {
+      const embedding = batchEmbeddings[k];
+      if (!Array.isArray(embedding) || embedding.length === 0) {
+        throw new Error(
+          "Embedding 返回向量为空或格式不兼容（item.embedding 缺失）。请检查 baseUrl 是否为 OpenAI 兼容 /v1 接口、以及模型是否为 embedding 模型。"
+        );
+      }
+      if (expectedDim == null) {
+        expectedDim = embedding.length;
+      } else if (embedding.length !== expectedDim) {
+        throw new Error("Embedding 返回维度不一致，无法计算相似度");
+      }
+    }
+
     batchEmbeddings.forEach((embedding, offset) => {
       const originalIndex = missingIndices[i + offset];
       const key = keys[originalIndex];
-      results[originalIndex] = embedding;
-      EMBEDDING_CACHE.set(key, embedding);
+      if (embedding) {
+        results[originalIndex] = embedding;
+      } else {
+        results[originalIndex] = [];
+      }
+      // 仅缓存有效向量，避免“空向量”污染缓存导致后续全部得分为 0
+      if (embedding && embedding.length > 0) {
+        EMBEDDING_CACHE.set(key, embedding);
+      }
     });
   }
 
@@ -266,12 +388,12 @@ function collectChunks(
   if (chunks.length === 0) {
     return [];
   }
-  const sorted = chunks.sort((a, b) => b.score - a.score || b.content.length - a.content.length);
+  const sorted = chunks.sort((a, b) => b.score - a.score);
   return sorted.slice(0, topK);
 }
 
-function chunkText(text: string, maxLen = 560, maxChunks = 36): string[] {
-  const normalized = text.replace(/\r\n/g, "\n").trim();
+function chunkText(text: string, maxLen = 800, overlap = 200, maxChunks = 48): string[] {
+  const normalized = normalizeExtractedText(text);
   if (!normalized) {
     return [];
   }
@@ -283,6 +405,23 @@ function chunkText(text: string, maxLen = 560, maxChunks = 36): string[] {
   const chunks: string[] = [];
   let buffer = "";
   for (const unit of units) {
+    if (unit.length > maxLen) {
+      if (buffer) {
+        chunks.push(buffer.slice(0, maxLen));
+        if (chunks.length >= maxChunks) {
+          return chunks;
+        }
+        buffer = "";
+      }
+      const step = Math.max(1, maxLen - overlap);
+      for (let start = 0; start < unit.length; start += step) {
+        chunks.push(unit.slice(start, start + maxLen));
+        if (chunks.length >= maxChunks) {
+          return chunks;
+        }
+      }
+      continue;
+    }
     if (!buffer) {
       buffer = unit;
       continue;
@@ -291,8 +430,17 @@ function chunkText(text: string, maxLen = 560, maxChunks = 36): string[] {
       buffer += ` ${unit}`;
       continue;
     }
-    chunks.push(buffer.slice(0, maxLen));
-    buffer = unit;
+    const prevBuffer = buffer;
+    chunks.push(prevBuffer.slice(0, maxLen));
+    if (overlap > 0) {
+      const tail = prevBuffer.slice(Math.max(0, prevBuffer.length - overlap)).trim();
+      buffer = tail ? `${tail} ${unit}` : unit;
+    } else {
+      buffer = unit;
+    }
+    if (buffer.length > maxLen) {
+      buffer = buffer.slice(buffer.length - maxLen);
+    }
     if (chunks.length >= maxChunks) {
       return chunks;
     }
@@ -303,9 +451,193 @@ function chunkText(text: string, maxLen = 560, maxChunks = 36): string[] {
   return chunks.slice(0, maxChunks);
 }
 
+function normalizeExtractedText(text: string): string {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  // 兼容字符标准化（全角/半角、连字等）
+  const normalizedCompat = normalizeCompatCharacters(normalized);
+
+  // 1) 去除常见不可见字符/软连字符，并统一空白
+  let cleaned = normalizedCompat
+    .replace(/[\u200b\u200c\u200d\ufeff\u00ad]/g, "")
+    .replace(/[\t\f\v\u00a0\u3000]+/g, " ");
+
+  // 2) 处理英文断字：如 "inter-\nface" -> "interface"（仅在换行处生效）
+  cleaned = cleaned.replace(/([A-Za-z])\-\s*\n\s*([A-Za-z])/g, "$1$2");
+
+  // 3) 拆行并清洗每行（保留换行用于识别页眉页脚/页码）
+  const rawLines = cleaned
+    .replace(/\s*\n+\s*/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (rawLines.length === 0) {
+    return "";
+  }
+
+  // 4) 过滤页码/页眉页脚（以“确定性规则”为主，避免误删正文）
+  const lines: string[] = [];
+  let prev = "";
+  for (const line of rawLines) {
+    if (isLikelyPageMarker(line)) {
+      continue;
+    }
+    const normalizedLine = line.replace(/[ ]{2,}/g, " ");
+    // 去除连续重复行（常见于 PDF 提取重复页脚）
+    if (normalizedLine && normalizedLine === prev) {
+      continue;
+    }
+    prev = normalizedLine;
+    lines.push(normalizedLine);
+  }
+
+  if (lines.length === 0) {
+    return "";
+  }
+
+  // 5) 统一项目符号（便于后续 chunk/关键词命中）
+  const bulletNormalized = lines.map((line) =>
+    line
+      .replace(/^[\u2022\u25cf\u25cb\u25a0\u25a1\u2219\u00b7\*]\s*/g, "• ")
+      .replace(/^(?:[-–—])\s+(?=\S)/g, "• ")
+  );
+
+  const merged = bulletNormalized.join("\n");
+
+  // 6) 去除中英混排常见“拆字空格”与标点周围空格
+  // 说明：部分 PDF/OCR 会产生“逐字空格”或把表意字符拆成偏旁/兼容表意字符片段；
+  // 因此这里扩大 CJK 字符集合（含偏旁部首、扩展区、兼容区），以通用方式合并被异常拆分的表意文本。
+  const CJK_RANGES = "\\p{Script=Han}\\u2E80-\\u2EFF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF";
+
+  const removeCjkSpaces = merged
+    // CJK-CJK（含偏旁部首/兼容表意字符）
+    .replace(new RegExp(`([${CJK_RANGES}])\\s+([${CJK_RANGES}])`, "gu"), "$1$2")
+    // 数字/英文 与 CJK 的粘连（常见于“12.7. 审查”）
+    .replace(new RegExp(`([0-9A-Za-z])\\s+([${CJK_RANGES}])`, "gu"), "$1$2")
+    .replace(new RegExp(`([${CJK_RANGES}])\\s+([0-9A-Za-z])`, "gu"), "$1$2");
+
+  // 中文标点与 CJK 间空格
+  const removeCjkPunctSpaces = removeCjkSpaces
+    .replace(new RegExp(`([${CJK_RANGES}])\\s+([，。！？；：、（）《》“”‘’])`, "gu"), "$1$2")
+    .replace(new RegExp(`([，。！？；：、（）《》“”‘’])\\s+([${CJK_RANGES}])`, "gu"), "$1$2");
+
+  // 英文标点周围空格：去除标点前空格；仅对 , ; : ! ? 这类分隔符统一为“标点后 1 个空格”。
+  // 注意：不要强制在句点 . 后补空格，否则会破坏小数/章节号/版本号（如 12.7 / v1.2）。
+  const normalizeLatinPunctSpaces = removeCjkPunctSpaces
+    // 去除标点前空格（包含 . 但不在 . 后强插空格）
+    .replace(/\s+([,.;:!?])/g, "$1")
+    // 修复数字-句点-数字之间的空格：12. 7 -> 12.7
+    .replace(/(\d)\s*\.\s*(\d)/g, "$1.$2")
+    // 对分隔符统一“标点后 1 个空格”
+    .replace(/([,;:!?])(?=\S)/g, "$1 ")
+    // 括号内外空格
+    .replace(/\s+([\)\]\}])/g, "$1")
+    .replace(/([\(\[\{])\s+/g, "$1");
+
+  // 7) 压缩多余空白行
+  return normalizeLatinPunctSpaces.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function normalizeCompatCharacters(text: string): string {
+  return text.normalize("NFKC");
+}
+
+function isLikelyPageMarker(line: string): boolean {
+  const s = line.trim();
+  if (!s) return true;
+
+  // 纯页码（含常见分隔符）
+  if (/^\d{1,4}$/.test(s)) return true;
+  if (/^\d{1,4}\s*\/\s*\d{1,4}$/.test(s)) return true;
+  if (/^\-\s*\d{1,4}\s*\-$/.test(s)) return true;
+
+  // 英文页码
+  if (/^page\s*\d{1,4}(\s*(of)?\s*\d{1,4})?$/i.test(s)) return true;
+
+  // 中文页码
+  if (/^第\s*\d{1,4}\s*页(\s*\/\s*共\s*\d{1,4}\s*页)?$/.test(s)) return true;
+
+  // 常见“导出工具/阅读器”页脚（保守匹配）
+  if (/^(confidential|copyright|版权所有|保密)\b/i.test(s)) return true;
+
+  return false;
+}
+
 function extractKeywords(text: string): string[] {
-  const tokens = text.match(/[A-Za-z0-9]+|[\u4e00-\u9fa5]{2,}/g) ?? [];
-  return Array.from(new Set(tokens.map((token) => token.toLowerCase()))).slice(0, 24);
+  const stopwords = new Set([
+    // EN
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "of",
+    "to",
+    "in",
+    "on",
+    "for",
+    "with",
+    "by",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "this",
+    "that",
+    "these",
+    "those",
+    "as",
+    "at",
+    "from",
+    "into",
+    "not",
+    "will",
+    "shall",
+    "can",
+    "could",
+    "may",
+    "might",
+    "should",
+    "would",
+    // 常见中文虚词
+    "的",
+    "和",
+    "与",
+    "及",
+    "以及",
+    "或",
+    "等",
+    "并",
+    "为",
+    "在",
+    "对",
+    "中",
+    "上",
+    "下",
+    "本",
+    "该",
+    "各",
+    "其",
+    "用于",
+    "进行"
+  ]);
+
+  const tokens =
+    text.match(/\d{1,4}(?:\.\d{1,4})+|[A-Za-z][A-Za-z0-9\-_\/]+|\d{2,}|[\p{Script=Han}\u2E80-\u2EFF\u3400-\u4DBF\uF900-\uFAFF]{2,}/gu) ??
+    [];
+  const normalized = tokens
+    .map((token) => token.toLowerCase().trim())
+    .filter((token) => token.length >= 2)
+    .filter((token) => !stopwords.has(token));
+
+  // 去重并限制数量：稍微提高上限，避免长 query 被过度截断
+  return Array.from(new Set(normalized)).slice(0, 32);
 }
 
 function scoreChunk(chunk: string, tokens: string[]): number {
@@ -674,4 +1006,71 @@ function buildReferences(sources: Array<{ type: string; filename: string }>): st
 
 function escapeTable(text: string): string {
   return text.replace(/\|/g, "｜").replace(/\n/g, " ");
+}
+
+// Hybrid retrieval helpers for re-ranking
+function keywordHitRate(text: string, tokens: string[]): number {
+  if (!tokens.length) {
+    return 0;
+  }
+  const lower = text.toLowerCase();
+  let hits = 0;
+  for (const token of tokens) {
+    if (!token) continue;
+    if (lower.includes(token)) {
+      hits += 1;
+    }
+  }
+  return hits / tokens.length;
+}
+
+function buildExactPhrases(query: string): string[] {
+  const normalized = query.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return [];
+  }
+  // 取较长的中文/英文片段作为“精确短语”，用于提升几乎完全相同的片段
+  const phrases: string[] = [];
+  const cjkRuns = normalized.match(/[\u4e00-\u9fff]{6,}/g) ?? [];
+  const engRuns = normalized.match(/[A-Za-z0-9][A-Za-z0-9\-_/ ]{10,}/g) ?? [];
+  for (const p of [...cjkRuns, ...engRuns]) {
+    const trimmed = p.trim();
+    if (trimmed.length >= 10) {
+      phrases.push(trimmed);
+    }
+  }
+  // 也补充“原始 query 的前半段”作为短语，避免 query 太长时短语全被拆散
+  if (normalized.length >= 14) {
+    phrases.push(normalized.slice(0, 40));
+  }
+  return Array.from(new Set(phrases)).slice(0, 8);
+}
+
+function exactPhraseBoost(text: string, phrases: string[]): number {
+  if (!phrases.length) {
+    return 0;
+  }
+  const normalizedText = text.replace(/\s+/g, " ").toLowerCase();
+  let boost = 0;
+  for (const phrase of phrases) {
+    const p = phrase.replace(/\s+/g, " ").toLowerCase();
+    if (p.length < 10) continue;
+    if (normalizedText.includes(p)) {
+      // 单个短语命中给予固定加分，多个命中上限封顶，避免完全由关键词主导
+      boost += 0.12;
+      if (boost >= 0.36) {
+        return 0.36;
+      }
+    }
+  }
+  return boost;
+}
+
+function combineRetrievalScore(embeddingScore: number, hitRate: number, phraseBoost: number): number {
+  // embeddingScore 通常在 [-1,1]，这里将其压到 [0,1] 便于融合
+  const emb01 = Math.max(0, Math.min(1, (embeddingScore + 1) / 2));
+  // hitRate 已是 0~1
+  const hybrid = 0.82 * emb01 + 0.18 * hitRate;
+  // 最终分数保持 0~1 左右，便于排序
+  return Math.min(1.2, hybrid + phraseBoost);
 }
