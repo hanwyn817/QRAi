@@ -20,21 +20,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Detect migration files
-        id: migrations
-        run: |
-          files=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep '^apps/worker/migrations/.*\.sql$' | grep -v '0000_baseline.sql' | sort | tr '\n' ' ')
-          echo "files=$files" >> $GITHUB_OUTPUT
-
       - name: Run D1 migrations
-        if: steps.migrations.outputs.files != ''
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           D1_DATABASE_NAME: ${{ secrets.D1_DATABASE_NAME }}
         run: |
-          for file in ${{ steps.migrations.outputs.files }}; do
-            npx wrangler d1 execute "$D1_DATABASE_NAME" --file "$file" --env production
-          done
+          npm --workspace apps/worker run d1:prod:init
 
       - name: Deploy Worker
         env:

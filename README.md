@@ -43,11 +43,14 @@ REPORT_TIMEZONE=Asia/Shanghai
 - `ADMIN_BOOTSTRAP_KEY` 用于创建管理员账号（注册页面有“管理员密钥”输入框），本地可随便设置一个字符串。
 - `REPORT_TIMEZONE` 是报告时间的时区，默认 `Asia/Shanghai`，不需要就不要改。
 
-### 2.3 初始化本地 D1
+### 2.3 本地 D1 初始化
 
 ```bash
 npm --workspace apps/worker run d1:local:init
 ```
+
+说明：
+- 使用迁移版本表 `schema_migrations` 记录已执行脚本，仅执行未执行的迁移。
 
 ### 2.4 启动后端（本地模拟）
 
@@ -104,18 +107,19 @@ binding = "BUCKET"
 bucket_name = "qrai-bucket"
 ```
 
-### 3.3 初始化数据库（生产首次部署只需一次）
+### 3.3 生产数据库迁移
 
 ```bash
 npm --workspace apps/worker run d1:prod:init
 ```
 
 说明：
-- 使用合并后的基线脚本 `apps/worker/migrations/0000_baseline.sql`，一次执行即可完成初始化。
+- 采用常规迁移策略，按顺序执行未执行的迁移文件（基于 `schema_migrations` 判断）。
 - 如果以后新增了字段/表：
-  1. 在 `apps/worker/migrations/` 新建一个递增编号的 SQL 文件（例如 `0007_add_xxx.sql`）。
+  1. 在 `apps/worker/migrations/` 新建一个递增编号的 SQL 文件（例如 `0008_add_xxx.sql`）。
   2. 把需要的 `ALTER TABLE` / `CREATE TABLE` 写进去。
-  3. 线上执行一次：`wrangler d1 execute qrai --file apps/worker/migrations/0007_add_xxx.sql`。
+  3. 线上执行一次：`wrangler d1 execute qrai --file apps/worker/migrations/0008_add_xxx.sql`，或直接运行 `npm --workspace apps/worker run d1:prod:init`。
+  4. 若为已有库首次引入迁移版本表，可先执行一次基线标记（不执行 SQL，仅写入迁移记录）：`npm --workspace apps/worker run d1:prod:init -- --baseline`。
 
 ### 3.4 配置 Workers 环境变量与密钥
 
@@ -176,7 +180,7 @@ npm --workspace apps/worker run deploy
 注意：
 - 如果你的默认分支不是 `main`，请修改 `.github/workflows/deploy.yml` 中的分支配置。
 - `VITE_API_BASE` 必须与后端实际访问地址一致，否则前端无法请求接口。
-- 自动迁移只会执行本次提交新增的迁移文件（`apps/worker/migrations/*.sql`），请不要修改已上线的旧迁移文件。
+- 自动迁移会基于 `schema_migrations` 判断未执行脚本，请不要修改已上线的旧迁移文件。
 
 如何设置 GitHub Secrets：
 1. 打开你的 GitHub 仓库页面。
