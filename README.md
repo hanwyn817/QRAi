@@ -161,6 +161,21 @@ npm --workspace apps/worker run deploy
 1. 访问前端注册页，在“管理员密钥”里填写 `ADMIN_BOOTSTRAP_KEY`，完成管理员初始化。
 2. 以管理员登录后，进入「模型管理」配置 OpenAI 兼容模型，并为每类模型设置默认值。
 
+## 3.8 自动部署（GitHub Actions）
+
+本仓库已提供自动部署流程（`.github/workflows/deploy.yml`），推送到 `main` 分支会自动部署 Worker 与 Pages。
+
+首次启用需要在 GitHub 仓库设置以下 Secrets：
+
+- `CLOUDFLARE_API_TOKEN`：需要包含 Workers 与 Pages 的发布权限。
+- `CLOUDFLARE_ACCOUNT_ID`：Cloudflare 账号 ID。
+- `CLOUDFLARE_PAGES_PROJECT_NAME`：Pages 项目名称（不是域名）。
+- `VITE_API_BASE`：前端请求后端的地址（例如 `https://<name>.<account>.workers.dev` 或你自己的域名）。
+
+注意：
+- 如果你的默认分支不是 `main`，请修改 `.github/workflows/deploy.yml` 中的分支配置。
+- `VITE_API_BASE` 必须与后端实际访问地址一致，否则前端无法请求接口。
+
 ## 4 配置文件说明（重点）
 
 ### 4.1 `apps/worker/.env.example`
