@@ -176,6 +176,12 @@ npm --workspace apps/worker run deploy
 - 如果你的默认分支不是 `main`，请修改 `.github/workflows/deploy.yml` 中的分支配置。
 - `VITE_API_BASE` 必须与后端实际访问地址一致，否则前端无法请求接口。
 
+如何设置 GitHub Secrets：
+1. 打开你的 GitHub 仓库页面。
+2. 进入 `Settings` → `Secrets and variables` → `Actions`。
+3. 点击 `New repository secret`。
+4. 按上面的名称逐个添加（Name 填变量名，Secret 填值）。
+
 ## 4 配置文件说明（重点）
 
 ### 4.1 `apps/worker/.env.example`
