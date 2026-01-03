@@ -322,6 +322,7 @@ export function buildMarkdownRenderPrompt(input: {
   scope: string;
   background: string;
   objectiveBias: string;
+  hazardMethodText: string;
   methodText: string;
   riskItemsJson: string;
   scoredItemsJson: string;
@@ -335,6 +336,7 @@ export function buildMarkdownRenderPrompt(input: {
 - 风险评价表须展示 S/P/D、理由、RPN、等级。
 - 风险控制表中的“控制措施”列必须使用输入数据中的 actions_text 原样输出（包含序号与 <br> 换行），不得自行改写。
 - 评估方法章节必须基于“评估方法说明”原样组织表述，不得杜撰或更改评分与风险等级规则。
+- 4.1 风险识别章节中，先写一段“危害源识别方法简介”，再给出表格；简介必须基于“危害源识别方法”，不得硬编码固定句式。
 - 语言风格：使用中文撰写，语言专业、清晰，风格接近药品生产企业质量管理文件。
 
 标题：${input.title}
@@ -348,17 +350,22 @@ ${buildUserContextBlock({
 模板（必须按照模版中给定的章节标题按顺序输出，且不能省略）：
 ${input.templateContent}
 
+危害源识别：
+  - 先写一段危害源识别方法的简介（3–5 句），再输出表格，不要照抄提示文本。本次使用的方法为：
+  ${normalizeBlock(input.hazardMethodText)}
+危害源识别表（含序号）：
+  ${input.riskItemsJson}
+
 评估方法说明（用于“评估方法 Assessment Tool”章节）：
 ${normalizeBlock(input.methodText)}
 
-危害源识别清单（含序号）：
-${input.riskItemsJson}
-
 风险评价表（含序号、RPN、等级等）：
 ${input.scoredItemsJson}
+在风险评价表格后面写一段小结，总结风险评价结果（3–5 句）。
 
 风险控制表（含序号、危害源、控制措施、S/P/D、RPN、等级；actions_text 已预格式化）：
 ${input.reevaluatedItemsJson}
+在风险控制表格后面写一段小结，总结风险控制结果（3–5 句）。
 
 行动计划表（含序号列（该序号单独编制，和危害源序号无关）、控制措施内容、责任角色、责任部门、计划完成日期）：
 ${input.actionsJson}

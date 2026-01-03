@@ -1027,6 +1027,7 @@ async function runWorkflow(
     scope: context.scope,
     background: context.background,
     objectiveBias: context.objectiveBias,
+    hazardMethodText: context.riskMethod,
     methodText,
     riskItemsJson: JSON.stringify(renderItems),
     scoredItemsJson: JSON.stringify(renderScoredItems),
