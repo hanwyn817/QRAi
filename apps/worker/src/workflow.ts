@@ -4,10 +4,11 @@ import type {
   FmeaScoringOutput,
   MappingValidation,
   ReportInput,
-  RiskIdentificationOutput,
+  HazardIdentificationOutput,
   RiskItem,
   ScoredRiskItem,
-  WorkflowContext
+  WorkflowContext,
+  SourceText
 } from "./aiTypes";
 import { DEFAULT_TEMPLATE } from "./prompts";
 import type { ModelRuntimeConfig } from "./types";
@@ -54,14 +55,29 @@ export async function buildWorkflowContext(
   const templateRequirements = summarizeTemplateRequirements(input.templateContent || DEFAULT_TEMPLATE);
 
   const query = [scope, background, objectiveBias].filter(Boolean).join(" ");
+  if (options?.onStage) {
+    const safeQuery = query.length > 320 ? `${query.slice(0, 320)}...` : query || "（空）";
+    options.onStage(`检索查询：${safeQuery}`);
+  }
+  const sopSources: SourceText[] =
+    input.sopSources && input.sopSources.length > 0
+      ? input.sopSources
+      : input.sopTexts.map((text) => ({ text, filename: null }));
+  const literatureSources: SourceText[] =
+    input.literatureSources && input.literatureSources.length > 0
+      ? input.literatureSources
+      : input.literatureTexts.map((text) => ({ text, filename: null }));
   const evidenceChunks = await buildEvidenceChunks(
     embeddingModel,
-    input.sopTexts,
-    input.literatureTexts,
+    sopSources,
+    literatureSources,
     query,
     evidenceTopK,
     options
   );
+  if (options?.onStage) {
+    options.onStage(formatEvidencePreview(evidenceChunks));
+  }
   options?.onStage?.("上下文拼装中...");
   const evidenceBlocks = formatEvidenceBlocks(evidenceChunks);
 
@@ -83,11 +99,26 @@ export async function buildWorkflowContext(
   };
 }
 
+function formatEvidencePreview(chunks: EvidenceChunk[], maxItems = 4, previewChars = 140): string {
+  if (chunks.length === 0) {
+    return "召回片段预览：无";
+  }
+  const items = chunks.slice(0, maxItems).map((chunk, index) => {
+    const cleaned = chunk.content.replace(/\s+/g, " ").trim();
+    const preview = cleaned.slice(0, previewChars);
+    const suffix = cleaned.length > previewChars ? "..." : "";
+    const score = Number.isFinite(chunk.score) ? chunk.score.toFixed(3) : "n/a";
+    const label = chunk.source === "sop" ? "SOP" : "文献";
+    return `${index + 1}. [${label}] (${score}) ${preview}${suffix}`;
+  });
+  const extra = chunks.length > maxItems ? `（其余 ${chunks.length - maxItems} 条省略）` : "";
+  return `召回片段预览：${items.join("；")}${extra}`;
+}
 
 async function buildEvidenceChunks(
   embeddingModel: ModelRuntimeConfig | null,
-  sopTexts: string[],
-  literatureTexts: string[],
+  sopTexts: SourceText[],
+  literatureTexts: SourceText[],
   query: string,
   topK: number,
   options?: { onStage?: (message: string) => void }
@@ -117,8 +148,8 @@ function hasEmbeddingConfig(embeddingModel: ModelRuntimeConfig | null): boolean 
 
 async function buildEmbeddingEvidence(
   embeddingModel: ModelRuntimeConfig | null,
-  sopTexts: string[],
-  literatureTexts: string[],
+  sopTexts: SourceText[],
+  literatureTexts: SourceText[],
   query: string,
   topK: number,
   options?: { onStage?: (message: string) => void }
@@ -158,43 +189,24 @@ async function buildEmbeddingEvidence(
 async function collectChunksByEmbedding(
   embeddingModel: ModelRuntimeConfig | null,
   source: "sop" | "literature",
-  texts: string[],
+  texts: SourceText[],
   queryEmbeddings: number[][],
   topK: number,
   queryTokens: string[] = [],
   queryPhrases: string[] = []
 ): Promise<EvidenceChunk[]> {
   const chunks: EvidenceChunk[] = [];
-  const rawChunkTexts: string[] = [];
-
-  // NOTE: 对超长文档，默认 chunkText 的 maxChunks=48 会导致仅覆盖前半段文本，后续章节永远无法被召回。
-  // 这里对向量检索路径提高覆盖上限，并在 embedding 前做一次廉价的关键词预筛选以控制成本。
-  for (const text of texts) {
-    for (const chunk of chunkText(text, 800, 200, 240)) {
-      rawChunkTexts.push(chunk);
+  const chunkTexts: string[] = [];
+  const chunkMetas: Array<{ source: "sop" | "literature"; filename: string | null }> = [];
+  for (const entry of texts) {
+    for (const chunk of chunkText(entry.text)) {
+      chunkTexts.push(chunk);
+      chunkMetas.push({ source, filename: entry.filename ?? null });
     }
   }
-  if (rawChunkTexts.length === 0) {
+  if (chunkTexts.length === 0) {
     return [];
   }
-
-  // 预筛选：当 chunk 太多时，用关键词/短语先筛出候选集，再做 embedding 重排。
-  // 目标：既覆盖全文，又避免对几百个 chunk 全部做向量化导致成本和耗时上升。
-  const targetCandidates = Math.max(topK * 24, 120);
-  const maxCandidates = Math.min(targetCandidates, 240);
-  let chunkTexts = rawChunkTexts;
-  if (queryTokens.length > 0 && rawChunkTexts.length > maxCandidates) {
-    const scored = rawChunkTexts.map((content) => {
-      const lex = scoreChunk(content, queryTokens);
-      const phrase = queryPhrases.length > 0 ? exactPhraseBoost(content, queryPhrases) : 0;
-      // lex 为主，短语为辅（放大短语影响但不压过 lex）
-      const preScore = lex + phrase * 10;
-      return { content, preScore };
-    });
-    scored.sort((a, b) => b.preScore - a.preScore);
-    chunkTexts = scored.slice(0, maxCandidates).map((item) => item.content);
-  }
-
   const embeddings = await getEmbeddings(embeddingModel, chunkTexts);
   if (embeddings.length !== chunkTexts.length) {
     throw new Error("Embedding 返回数量不匹配");
@@ -208,7 +220,8 @@ async function collectChunksByEmbedding(
     const phraseBoost = exactPhraseBoost(content, queryPhrases);
     // 混合评分（保持 embedding 为主，关键词/短语为辅）
     const score = combineRetrievalScore(embScore, hitRate, phraseBoost);
-    chunks.push({ source, content, score });
+    const meta = chunkMetas[index] ?? { source, filename: null };
+    chunks.push({ source: meta.source, content, score, filename: meta.filename });
   });
   const sorted = chunks.sort((a, b) => b.score - a.score);
   return sorted.slice(0, topK);
@@ -303,20 +316,24 @@ async function getEmbeddings(
     const data = (await response.json()) as {
       data?: Array<{ embedding?: number[] }>;
     };
-    const batchEmbeddings = data.data?.map((item) => item.embedding) ?? [];
-    if (batchEmbeddings.length !== batch.length) {
+    const rawEmbeddings = data.data ?? [];
+    if (rawEmbeddings.length !== batch.length) {
       throw new Error("Embedding 返回缺失");
     }
-
-    // 校验：不得出现空向量或维度不一致（常见于接口返回格式不兼容/被代理改写）
-    let expectedDim: number | null = null;
-    for (let k = 0; k < batchEmbeddings.length; k += 1) {
-      const embedding = batchEmbeddings[k];
+    const batchEmbeddings = rawEmbeddings.map((item) => {
+      const embedding = item.embedding;
       if (!Array.isArray(embedding) || embedding.length === 0) {
         throw new Error(
           "Embedding 返回向量为空或格式不兼容（item.embedding 缺失）。请检查 baseUrl 是否为 OpenAI 兼容 /v1 接口、以及模型是否为 embedding 模型。"
         );
       }
+      return embedding;
+    });
+
+    // 校验：不得出现空向量或维度不一致（常见于接口返回格式不兼容/被代理改写）
+    let expectedDim: number | null = null;
+    for (let k = 0; k < batchEmbeddings.length; k += 1) {
+      const embedding = batchEmbeddings[k];
       if (expectedDim == null) {
         expectedDim = embedding.length;
       } else if (embedding.length !== expectedDim) {
@@ -326,14 +343,16 @@ async function getEmbeddings(
 
     batchEmbeddings.forEach((embedding, offset) => {
       const originalIndex = missingIndices[i + offset];
-      const key = keys[originalIndex];
-      if (embedding) {
-        results[originalIndex] = embedding;
-      } else {
-        results[originalIndex] = [];
+      if (originalIndex == null) {
+        throw new Error("Embedding 返回索引缺失");
       }
+      const key = keys[originalIndex];
+      if (!key) {
+        throw new Error("Embedding 缓存键缺失");
+      }
+      results[originalIndex] = embedding;
       // 仅缓存有效向量，避免“空向量”污染缓存导致后续全部得分为 0
-      if (embedding && embedding.length > 0) {
+      if (embedding.length > 0) {
         EMBEDDING_CACHE.set(key, embedding);
       }
     });
@@ -374,15 +393,15 @@ function cosineSimilarity(a: number[], b: number[]): number {
 
 function collectChunks(
   source: "sop" | "literature",
-  texts: string[],
+  texts: SourceText[],
   queryTokens: string[],
   topK: number
 ): EvidenceChunk[] {
   const chunks: EvidenceChunk[] = [];
-  for (const text of texts) {
-    for (const chunk of chunkText(text)) {
+  for (const entry of texts) {
+    for (const chunk of chunkText(entry.text)) {
       const score = scoreChunk(chunk, queryTokens);
-      chunks.push({ source, content: chunk, score });
+      chunks.push({ source, content: chunk, score, filename: entry.filename ?? null });
     }
   }
   if (chunks.length === 0) {
@@ -456,188 +475,68 @@ function normalizeExtractedText(text: string): string {
   if (!normalized) {
     return "";
   }
-
-  // 兼容字符标准化（全角/半角、连字等）
   const normalizedCompat = normalizeCompatCharacters(normalized);
-
-  // 1) 去除常见不可见字符/软连字符，并统一空白
-  let cleaned = normalizedCompat
+  const merged = normalizedCompat
     .replace(/[\u200b\u200c\u200d\ufeff\u00ad]/g, "")
-    .replace(/[\t\f\v\u00a0\u3000]+/g, " ");
-
-  // 2) 处理英文断字：如 "inter-\nface" -> "interface"（仅在换行处生效）
-  cleaned = cleaned.replace(/([A-Za-z])\-\s*\n\s*([A-Za-z])/g, "$1$2");
-
-  // 3) 拆行并清洗每行（保留换行用于识别页眉页脚/页码）
-  const rawLines = cleaned
-    .replace(/\s*\n+\s*/g, "\n")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (rawLines.length === 0) {
-    return "";
-  }
-
-  // 4) 过滤页码/页眉页脚（以“确定性规则”为主，避免误删正文）
-  const lines: string[] = [];
-  let prev = "";
-  for (const line of rawLines) {
-    if (isLikelyPageMarker(line)) {
-      continue;
-    }
-    const normalizedLine = line.replace(/[ ]{2,}/g, " ");
-    // 去除连续重复行（常见于 PDF 提取重复页脚）
-    if (normalizedLine && normalizedLine === prev) {
-      continue;
-    }
-    prev = normalizedLine;
-    lines.push(normalizedLine);
-  }
-
-  if (lines.length === 0) {
-    return "";
-  }
-
-  // 5) 统一项目符号（便于后续 chunk/关键词命中）
-  const bulletNormalized = lines.map((line) =>
-    line
-      .replace(/^[\u2022\u25cf\u25cb\u25a0\u25a1\u2219\u00b7\*]\s*/g, "• ")
-      .replace(/^(?:[-–—])\s+(?=\S)/g, "• ")
-  );
-
-  const merged = bulletNormalized.join("\n");
-
-  // 6) 去除中英混排常见“拆字空格”与标点周围空格
-  // 说明：部分 PDF/OCR 会产生“逐字空格”或把表意字符拆成偏旁/兼容表意字符片段；
-  // 因此这里扩大 CJK 字符集合（含偏旁部首、扩展区、兼容区），以通用方式合并被异常拆分的表意文本。
-  const CJK_RANGES = "\\p{Script=Han}\\u2E80-\\u2EFF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF";
-
-  const removeCjkSpaces = merged
-    // CJK-CJK（含偏旁部首/兼容表意字符）
-    .replace(new RegExp(`([${CJK_RANGES}])\\s+([${CJK_RANGES}])`, "gu"), "$1$2")
-    // 数字/英文 与 CJK 的粘连（常见于“12.7. 审查”）
-    .replace(new RegExp(`([0-9A-Za-z])\\s+([${CJK_RANGES}])`, "gu"), "$1$2")
-    .replace(new RegExp(`([${CJK_RANGES}])\\s+([0-9A-Za-z])`, "gu"), "$1$2");
-
-  // 中文标点与 CJK 间空格
-  const removeCjkPunctSpaces = removeCjkSpaces
-    .replace(new RegExp(`([${CJK_RANGES}])\\s+([，。！？；：、（）《》“”‘’])`, "gu"), "$1$2")
-    .replace(new RegExp(`([，。！？；：、（）《》“”‘’])\\s+([${CJK_RANGES}])`, "gu"), "$1$2");
-
-  // 英文标点周围空格：去除标点前空格；仅对 , ; : ! ? 这类分隔符统一为“标点后 1 个空格”。
-  // 注意：不要强制在句点 . 后补空格，否则会破坏小数/章节号/版本号（如 12.7 / v1.2）。
-  const normalizeLatinPunctSpaces = removeCjkPunctSpaces
-    // 去除标点前空格（包含 . 但不在 . 后强插空格）
-    .replace(/\s+([,.;:!?])/g, "$1")
-    // 修复数字-句点-数字之间的空格：12. 7 -> 12.7
-    .replace(/(\d)\s*\.\s*(\d)/g, "$1.$2")
-    // 对分隔符统一“标点后 1 个空格”
-    .replace(/([,;:!?])(?=\S)/g, "$1 ")
-    // 括号内外空格
-    .replace(/\s+([\)\]\}])/g, "$1")
-    .replace(/([\(\[\{])\s+/g, "$1");
-
-  // 7) 压缩多余空白行
-  return normalizeLatinPunctSpaces.replace(/\n{3,}/g, "\n\n").trim();
+    .replace(/[ \t\u00a0\u3000]+/g, " ")
+    .replace(/\s*\n+\s*/g, "\n");
+  const removeCjkSpaces = merged.replace(/([\p{Script=Han}])\s+([\p{Script=Han}])/gu, "$1$2");
+  const removeCjkLatinSpaces = removeCjkSpaces
+    .replace(/([\p{Script=Han}])\s+([A-Za-z0-9])/gu, "$1$2")
+    .replace(/([A-Za-z0-9])\s+([\p{Script=Han}])/gu, "$1$2");
+  const removeCjkPunctSpaces = removeCjkLatinSpaces
+    .replace(/([\p{Script=Han}])\s+([，。！？；：、（）《》“”‘’])/gu, "$1$2")
+    .replace(/([，。！？；：、（）《》“”‘’])\s+([\p{Script=Han}])/gu, "$1$2");
+  return removeCjkPunctSpaces.trim();
 }
 
 function normalizeCompatCharacters(text: string): string {
-  return text.normalize("NFKC");
-}
-
-function isLikelyPageMarker(line: string): boolean {
-  const s = line.trim();
-  if (!s) return true;
-
-  // 纯页码（含常见分隔符）
-  if (/^\d{1,4}$/.test(s)) return true;
-  if (/^\d{1,4}\s*\/\s*\d{1,4}$/.test(s)) return true;
-  if (/^\-\s*\d{1,4}\s*\-$/.test(s)) return true;
-
-  // 英文页码
-  if (/^page\s*\d{1,4}(\s*(of)?\s*\d{1,4})?$/i.test(s)) return true;
-
-  // 中文页码
-  if (/^第\s*\d{1,4}\s*页(\s*\/\s*共\s*\d{1,4}\s*页)?$/.test(s)) return true;
-
-  // 常见“导出工具/阅读器”页脚（保守匹配）
-  if (/^(confidential|copyright|版权所有|保密)\b/i.test(s)) return true;
-
-  return false;
+  const map: Record<string, string> = {
+    "⽇": "日",
+    "⽉": "月",
+    "⽕": "火",
+    "⽔": "水",
+    "⽊": "木",
+    "⾦": "金",
+    "⼟": "土",
+    "⻛": "风",
+    "⽅": "方",
+    "⽬": "目",
+    "⼝": "口",
+    "⼈": "人",
+    "⼿": "手",
+    "⼼": "心",
+    "⾏": "行",
+    "⽣": "生",
+    "⽤": "用",
+    "⽂": "文",
+    "⽼": "老",
+    "⽌": "止",
+    "⽑": "毛",
+    "⽐": "比",
+    "⽟": "玉",
+    "⽯": "石",
+    "⽰": "示",
+    "⽴": "立",
+    "⽶": "米",
+    "⽷": "糸",
+    "⽹": "网",
+    "⾍": "虫",
+    "⾐": "衣",
+    "⾞": "车",
+    "⾟": "辛",
+    "⾨": "门",
+    "⾻": "骨",
+    "⾼": "高",
+    "⾺": "马",
+    "⾝": "身"
+  };
+  return text.replace(/[\u2f00-\u2fdf]/g, (match) => map[match] ?? match);
 }
 
 function extractKeywords(text: string): string[] {
-  const stopwords = new Set([
-    // EN
-    "the",
-    "a",
-    "an",
-    "and",
-    "or",
-    "of",
-    "to",
-    "in",
-    "on",
-    "for",
-    "with",
-    "by",
-    "is",
-    "are",
-    "was",
-    "were",
-    "be",
-    "been",
-    "this",
-    "that",
-    "these",
-    "those",
-    "as",
-    "at",
-    "from",
-    "into",
-    "not",
-    "will",
-    "shall",
-    "can",
-    "could",
-    "may",
-    "might",
-    "should",
-    "would",
-    // 常见中文虚词
-    "的",
-    "和",
-    "与",
-    "及",
-    "以及",
-    "或",
-    "等",
-    "并",
-    "为",
-    "在",
-    "对",
-    "中",
-    "上",
-    "下",
-    "本",
-    "该",
-    "各",
-    "其",
-    "用于",
-    "进行"
-  ]);
-
-  const tokens =
-    text.match(/\d{1,4}(?:\.\d{1,4})+|[A-Za-z][A-Za-z0-9\-_\/]+|\d{2,}|[\p{Script=Han}\u2E80-\u2EFF\u3400-\u4DBF\uF900-\uFAFF]{2,}/gu) ??
-    [];
-  const normalized = tokens
-    .map((token) => token.toLowerCase().trim())
-    .filter((token) => token.length >= 2)
-    .filter((token) => !stopwords.has(token));
-
-  // 去重并限制数量：稍微提高上限，避免长 query 被过度截断
-  return Array.from(new Set(normalized)).slice(0, 32);
+  const tokens = text.match(/[A-Za-z0-9]+|[\u4e00-\u9fa5]{2,}/g) ?? [];
+  return Array.from(new Set(tokens.map((token) => token.toLowerCase()))).slice(0, 24);
 }
 
 function scoreChunk(chunk: string, tokens: string[]): number {
@@ -675,8 +574,8 @@ function formatEvidenceBlocks(chunks: EvidenceChunk[]): string {
   return [buildSection("SOP片段", sopChunks), buildSection("文献片段", literatureChunks)].join("\n\n");
 }
 
-export function validateRiskIdentification(
-  output: RiskIdentificationOutput,
+export function validateHazardIdentification(
+  output: HazardIdentificationOutput,
   riskMethod: string
 ): MappingValidation {
   const issues: string[] = [];

@@ -867,6 +867,8 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
 
   const sopTexts: string[] = [];
   const literatureTexts: string[] = [];
+  const sopSources: Array<{ text: string; filename: string | null }> = [];
+  const literatureSources: Array<{ text: string; filename: string | null }> = [];
   const sourceFiles: Array<{ type: string; filename: string }> = [];
   for (const row of files.results ?? []) {
     const textKey = row.text_key as string | null;
@@ -883,8 +885,10 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
     }
     if (row.type === "sop") {
       sopTexts.push(text);
+      sopSources.push({ text, filename });
     } else if (row.type === "literature") {
       literatureTexts.push(text);
+      literatureSources.push({ text, filename });
     }
   }
 
@@ -954,6 +958,8 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
       templateContent: templateContent ?? null,
       sopTexts,
       literatureTexts,
+      sopSources,
+      literatureSources,
       sourceFiles
     });
 
@@ -1051,6 +1057,8 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
 
   const sopTexts: string[] = [];
   const literatureTexts: string[] = [];
+  const sopSources: Array<{ text: string; filename: string | null }> = [];
+  const literatureSources: Array<{ text: string; filename: string | null }> = [];
   const sourceFiles: Array<{ type: string; filename: string }> = [];
   for (const row of files.results ?? []) {
     const textKey = row.text_key as string | null;
@@ -1067,8 +1075,10 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
     }
     if (row.type === "sop") {
       sopTexts.push(text);
+      sopSources.push({ text, filename });
     } else if (row.type === "literature") {
       literatureTexts.push(text);
+      literatureSources.push({ text, filename });
     }
   }
 
@@ -1135,6 +1145,8 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
               templateContent: templateContent ?? null,
               sopTexts,
               literatureTexts,
+              sopSources,
+              literatureSources,
               sourceFiles
             },
             {

@@ -8,6 +8,8 @@ export type ReportInput = {
   templateContent: string | null;
   sopTexts: string[];
   literatureTexts: string[];
+  sopSources?: SourceText[];
+  literatureSources?: SourceText[];
   searchResults?: string[];
   sourceFiles?: Array<{ type: string; filename: string }>;
   processSteps?: Array<{ step_id: string; step_name: string }>;
@@ -29,6 +31,12 @@ export type EvidenceChunk = {
   source: "sop" | "literature";
   content: string;
   score: number;
+  filename?: string | null;
+};
+
+export type SourceText = {
+  text: string;
+  filename: string | null;
 };
 
 export type WorkflowContext = {
@@ -57,7 +65,7 @@ export type RiskItem = {
   consequence: string;
 };
 
-export type RiskIdentificationOutput = {
+export type HazardIdentificationOutput = {
   items: RiskItem[];
 };
 

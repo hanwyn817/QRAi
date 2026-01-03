@@ -3,8 +3,8 @@ import {
   buildActionsPrompt,
   buildFmeaScoringPrompt,
   buildMarkdownRenderPrompt,
-  buildRiskIdentificationFiveFactorsPrompt,
-  buildRiskIdentificationProcessFlowPrompt,
+  buildHazardIdentificationFiveFactorsPrompt,
+  buildHazardIdentificationProcessFlowPrompt,
   SYSTEM_QRM,
   SYSTEM_QRM_MARKDOWN
 } from "./prompts";
@@ -14,13 +14,13 @@ import type {
   FmeaScoringOutput,
   GeneratedReport,
   ReportInput,
-  RiskIdentificationOutput,
+  HazardIdentificationOutput,
   RiskItem,
   TokenUsage,
   WorkflowContext,
   ScoredRiskItem
 } from "./aiTypes";
-import { buildWorkflowContext, mergeScoring, validateActionsOutput, validateRiskIdentification } from "./workflow";
+import { buildWorkflowContext, mergeScoring, validateActionsOutput, validateHazardIdentification } from "./workflow";
 
 const RISK_ID_PLACEHOLDER = "00000000-0000-0000-0000-000000000000";
 const FIVE_FACTOR_DIMENSIONS = ["人员", "设备与设施", "物料", "法规与程序", "环境"];
@@ -76,7 +76,7 @@ function parseObjectivePolicy(objectiveBias: string): { allowActions: boolean; f
 type StepStatus = "running" | "done";
 type StepName =
   | "context"
-  | "risk_identification"
+  | "hazard_identification"
   | "mapping_validation"
   | "fmea_scoring"
   | "action_generation"
@@ -473,10 +473,10 @@ function ensureExactKeys(record: Record<string, unknown>, keys: string[], label:
   }
 }
 
-function parseRiskIdentification(raw: unknown, expectedMode: "five_factors" | "process_flow"): RiskItem[] {
-  const record = expectRecord(raw, "风险识别结果");
+function parseHazardIdentification(raw: unknown, expectedMode: "five_factors" | "process_flow"): RiskItem[] {
+  const record = expectRecord(raw, "危害源识别结果");
   if (!Array.isArray(record.items)) {
-    throw new Error("风险识别结果 items 不是数组");
+    throw new Error("危害源识别结果 items 不是数组");
   }
   const items: RiskItem[] = [];
   record.items.forEach((item, index) => {
@@ -706,17 +706,18 @@ async function runWorkflow(
     context.evidenceChunks.map((item) => ({
       source: item.source,
       content: item.content,
-      score: item.score
+      score: item.score,
+      filename: item.filename ?? null
     }))
   );
   await sleep(3000, signal);
   handlers?.onStep?.("context", "done");
 
   ensureNotAborted(signal);
-  handlers?.onStep?.("risk_identification", "running");
+  handlers?.onStep?.("hazard_identification", "running");
   const useProcessFlow = Boolean(input.riskMethod?.includes("流程") && input.processSteps?.length);
   const riskPrompt = useProcessFlow
-    ? buildRiskIdentificationProcessFlowPrompt({
+    ? buildHazardIdentificationProcessFlowPrompt({
         scope: context.scope,
         background: context.background,
         objectiveBias: context.objectiveBias,
@@ -724,7 +725,7 @@ async function runWorkflow(
         processStepsJson: JSON.stringify(input.processSteps ?? []),
         evidenceBlocks: context.evidenceBlocks
       })
-    : buildRiskIdentificationFiveFactorsPrompt({
+    : buildHazardIdentificationFiveFactorsPrompt({
         scope: context.scope,
         background: context.background,
         objectiveBias: context.objectiveBias,
@@ -732,22 +733,22 @@ async function runWorkflow(
         evidenceBlocks: context.evidenceBlocks
       });
   const riskResponse = handlers?.onLlmDelta
-    ? await callJsonLlmStream<RiskIdentificationOutput>(
+    ? await callJsonLlmStream<HazardIdentificationOutput>(
         models.llm,
         riskPrompt,
-        "risk_identification",
+        "hazard_identification",
         handlers,
         signal
       )
-    : await callJsonLlm<RiskIdentificationOutput>(models.llm, riskPrompt, signal);
+    : await callJsonLlm<HazardIdentificationOutput>(models.llm, riskPrompt, signal);
   let usage = accumulateUsage(undefined, riskResponse.usage);
   handlers?.onUsage?.(usage ?? {});
-  const riskItems = parseRiskIdentification(riskResponse.data, useProcessFlow ? "process_flow" : "five_factors");
-  handlers?.onStep?.("risk_identification", "done");
+  const riskItems = parseHazardIdentification(riskResponse.data, useProcessFlow ? "process_flow" : "five_factors");
+  handlers?.onStep?.("hazard_identification", "done");
 
   ensureNotAborted(signal);
   handlers?.onStep?.("mapping_validation", "running");
-  const mapping = validateRiskIdentification({ items: riskItems }, context.riskMethod);
+  const mapping = validateHazardIdentification({ items: riskItems }, context.riskMethod);
   if (!mapping.ok) {
     throw new Error(`一致性校验失败: ${mapping.issues.join("；")}`);
   }

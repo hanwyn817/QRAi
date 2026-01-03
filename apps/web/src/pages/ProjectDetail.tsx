@@ -33,7 +33,7 @@ const parseProcessStepsText = (value: string) => {
 };
 const WORKFLOW_STEPS = [
   { id: "context", label: "准备上下文" },
-  { id: "risk_identification", label: "风险识别" },
+  { id: "hazard_identification", label: "危害源识别" },
   { id: "fmea_scoring", label: "风险评价" },
   { id: "action_generation", label: "生成改进措施" },
   { id: "rendering", label: "报告渲染" }
@@ -109,7 +109,7 @@ export default function ProjectDetail() {
   const [contextStageMessage, setContextStageMessage] = useState<string | null>(null);
   const [contextStageLog, setContextStageLog] = useState<string[]>([]);
   const [contextEvidence, setContextEvidence] = useState<
-    Array<{ source: string; content: string; score: number }>
+    Array<{ source: string; content: string; score: number; filename?: string | null }>
   >([]);
   const [contextMeta, setContextMeta] = useState<{
     usedEmbedding: boolean;
@@ -145,6 +145,21 @@ export default function ProjectDetail() {
     () => workflowSteps.find((step) => step.status === "running")?.id ?? null,
     [workflowSteps]
   );
+
+  const normalizeContextStage = (message: string): string | null => {
+    if (!message) {
+      return null;
+    }
+    const trimmed = message.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed.startsWith("向量检索失败")) {
+      return "关键词检索中...";
+    }
+    const allowed = ["向量化中...", "向量检索中...", "关键词检索中...", "上下文拼装中..."];
+    return allowed.includes(trimmed) ? trimmed : null;
+  };
 
   const activeOutputLength = useMemo(() => {
     if (!activeStepId || activeStepId === "rendering") {
@@ -314,7 +329,7 @@ export default function ProjectDetail() {
       if (!fragment) {
         return null;
       }
-      if (activeStepId === "risk_identification") {
+      if (activeStepId === "hazard_identification") {
         const draft = {
           dimension: readStringValue(fragment, "dimension"),
           failure_mode: readStringValue(fragment, "failure_mode"),
@@ -352,7 +367,7 @@ export default function ProjectDetail() {
 
     const { objects, openFragment } = extractObjects(raw);
     const draft = buildDraft(openFragment);
-    if (activeStepId === "risk_identification") {
+    if (activeStepId === "hazard_identification") {
       const items = objects.filter((obj) => "failure_mode" in obj && "consequence" in obj && "dimension" in obj);
       const uniq = new Map<string, Record<string, any>>();
       items.forEach((item) => {
@@ -549,7 +564,11 @@ export default function ProjectDetail() {
       return (
         <div className="context-evidence">
           <div className="stream-hint">
-            {stageText ? `准备上下文：${stageText}` : contextStageMessage ? `准备上下文：${contextStageMessage}` : "准备上下文处理中..."}
+            {stageText
+              ? `准备上下文：${stageText}`
+              : contextStageMessage
+                ? `准备上下文：${contextStageMessage}`
+                : "准备上下文处理中..."}
           </div>
           {contextStageLog.length > 0 ? (
             <div className="context-stage-log">
@@ -572,7 +591,10 @@ export default function ProjectDetail() {
                 <div key={`${item.source}-${index}`} className="context-evidence-item">
                   <div className="context-evidence-meta">
                     <span className="pill">{item.source === "sop" ? "SOP" : "文献"}</span>
-                    <span className="muted">相似度 {item.score.toFixed(3)}</span>
+                    <span className="muted">
+                      相似度 {item.score.toFixed(3)} ·{" "}
+                      {item.filename && item.filename.trim() ? item.filename.trim() : "未知文件"}
+                    </span>
                   </div>
                   <div className="context-evidence-content">{item.content}</div>
                 </div>
@@ -589,10 +611,10 @@ export default function ProjectDetail() {
         </div>
       );
     }
-    if (activeStepId === "risk_identification") {
+    if (activeStepId === "hazard_identification") {
       const items = Array.isArray((output as any).items) ? (output as any).items : [];
       if (items.length === 0) {
-        return <div className="stream-hint">正在输出风险识别结果...</div>;
+        return <div className="stream-hint">正在输出危害源识别结果...</div>;
       }
       return (
         <table className="workflow-table">
@@ -1008,24 +1030,34 @@ export default function ProjectDetail() {
           if (!messageText) {
             return;
           }
-          setContextStageMessage(messageText);
-          setContextStageLog((prev) => {
-            if (prev[prev.length - 1] === messageText) {
-              return prev;
-            }
-            return [...prev, messageText];
-          });
+          const normalized = normalizeContextStage(messageText);
+          if (normalized) {
+            setContextStageMessage(normalized);
+            setContextStageLog((prev) => {
+              if (prev[prev.length - 1] === normalized) {
+                return prev;
+              }
+              return [...prev, normalized];
+            });
+          }
           return;
         }
         if (eventName === "context_stages") {
-          const messages = Array.isArray(payload.messages)
-            ? payload.messages.filter((item) => typeof item === "string")
-            : [];
+          const rawMessages = Array.isArray(payload.messages) ? (payload.messages as unknown[]) : [];
+          const messages = rawMessages.filter((item): item is string => typeof item === "string");
           if (messages.length === 0) {
             return;
           }
-          setContextStageLog(messages);
-          setContextStageMessage(messages[messages.length - 1] ?? null);
+          const normalized = messages
+            .map((item) => normalizeContextStage(item))
+            .filter((item): item is string => Boolean(item));
+          const latest = normalized[normalized.length - 1] ?? null;
+          if (latest) {
+            setContextStageMessage(latest);
+          }
+          if (normalized.length > 0) {
+            setContextStageLog(normalized);
+          }
           return;
         }
         if (eventName === "context_evidence") {
@@ -1254,7 +1286,7 @@ export default function ProjectDetail() {
             <h4>评估方法设置</h4>
             <div className="config-grid">
               <label>
-                风险识别方法
+                危害源识别方法
                 <select
                   value={inputs.riskMethod}
                   onChange={(e) => setInputs((prev) => ({ ...prev, riskMethod: e.target.value }))}
@@ -1287,7 +1319,7 @@ export default function ProjectDetail() {
                     onChange={(e) => setInputs((prev) => ({ ...prev, processStepsText: e.target.value }))}
                     placeholder={`每行一个步骤，例如：\n原料接收\n生产准备\n生产操作\n成品放行`}
                   />
-                  <span className="muted">每行一个步骤，仅用于流程法风险识别。</span>
+                  <span className="muted">每行一个步骤，仅用于流程法危害源识别。</span>
                 </label>
               ) : null}
             </div>
