@@ -1,28 +1,28 @@
 export const DEFAULT_TEMPLATE = `# 风险评估报告标题
 
-## 1. 概述
+## 1. 概述 Summary
 
-## 2. 目的
+## 2. 目的 Objective
 
-## 3. 范围
+## 3. 范围 Scope
 
-## 4. 风险评估
+## 4. 风险评估 Risk Assessment
 
-### 4.1 危害源识别
+### 4.1 危害源识别 Hazard Identification
 
-### 4.2 评估方法
+### 4.2 评估方法 Assessment Tool
 
-### 4.3 风险评价（评估表）
+### 4.3 风险分析和评价 Risk Analysis and Evaluation
 
-### 4.4 风险控制
+### 4.4 风险控制 Risk Control
 
-## 5. 控制措施行动计划
+## 5. 控制措施行动计划 CAPA Plan
 
-## 6. 风险评估结论
+## 6. 风险评估结论 Conclusion
 
-## 7. 再评估
+## 7. 再评估 Risk Review
 
-## 8. 参考文件
+## 8. 参考文件 Reference
 `;
 
 export const SYSTEM_QRM = `你是药品生产领域质量风险管理（QRM）专家，熟悉 ICH Q9、GMP 与常见监管缺陷逻辑。
@@ -322,6 +322,7 @@ export function buildMarkdownRenderPrompt(input: {
   scope: string;
   background: string;
   objectiveBias: string;
+  methodText: string;
   riskItemsJson: string;
   scoredItemsJson: string;
   actionsJson: string;
@@ -333,9 +334,10 @@ export function buildMarkdownRenderPrompt(input: {
 - 危害源识别表、风险评价表、风险控制表和行动计划表均使用“序号”，不要输出 risk_id。
 - 风险评价表须展示 S/P/D、理由、RPN、等级。
 - 风险控制表中的“控制措施”列必须使用输入数据中的 actions_text 原样输出（包含序号与 <br> 换行），不得自行改写。
+- 评估方法章节必须基于“评估方法说明”原样组织表述，不得杜撰或更改评分与风险等级规则。
 - 语言风格：使用中文撰写，语言专业、清晰，风格接近药品生产企业质量管理文件。
 
-项目标题：${input.title}
+标题：${input.title}
 
 ${buildUserContextBlock({
     scope: input.scope,
@@ -345,6 +347,9 @@ ${buildUserContextBlock({
 }
 模板（必须按照模版中给定的章节标题按顺序输出，且不能省略）：
 ${input.templateContent}
+
+评估方法说明（用于“评估方法 Assessment Tool”章节）：
+${normalizeBlock(input.methodText)}
 
 危害源识别清单（含序号）：
 ${input.riskItemsJson}

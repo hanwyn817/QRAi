@@ -990,6 +990,11 @@ async function runWorkflow(
     seq: actionSeqMap.get(entry.risk_id) ?? null,
     actions: entry.actions
   }));
+  const methodText = [
+    `风险识别方法：${context.riskMethod}。`,
+    `评估工具：${context.evalTool}，采用严重性(S)、可能性(P)、可测性(D)三维评分，取值为 9/6/3/1。`,
+    `系统按 RPN=S×P×D 计算风险等级：RPN<27 极低，27-53 低，54-107 中，≥108 高。`
+  ].join("\n");
   const formatActionsText = (items: Array<{ action_text: string }>) => {
     if (!items.length) {
       return "—";
@@ -1022,6 +1027,7 @@ async function runWorkflow(
     scope: context.scope,
     background: context.background,
     objectiveBias: context.objectiveBias,
+    methodText,
     riskItemsJson: JSON.stringify(renderItems),
     scoredItemsJson: JSON.stringify(renderScoredItems),
     actionsJson: JSON.stringify(renderActions),
