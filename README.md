@@ -87,7 +87,7 @@ npm run dev:web
 ### 3.2 创建 D1 与 R2 资源
 
 ```bash
-wrangler d1 create qrai
+wrangler d1 create qrai-db
 wrangler r2 bucket create qrai-bucket
 ```
 
@@ -96,7 +96,7 @@ wrangler r2 bucket create qrai-bucket
 ```toml
 [[d1_databases]]
 binding = "DB"
-database_name = "qrai"
+database_name = "qrai-db"
 database_id = "你的真实D1 ID"
 
 [[r2_buckets]]
@@ -171,10 +171,12 @@ npm --workspace apps/worker run deploy
 - `CLOUDFLARE_ACCOUNT_ID`：Cloudflare 账号 ID。
 - `CLOUDFLARE_PAGES_PROJECT_NAME`：Pages 项目名称（不是域名）。
 - `VITE_API_BASE`：前端请求后端的地址（例如 `https://<name>.<account>.workers.dev` 或你自己的域名）。
+- `D1_DATABASE_NAME`：生产 D1 数据库名称（例如 `qrai-db`，与 `wrangler d1 create` 时的名字一致）。
 
 注意：
 - 如果你的默认分支不是 `main`，请修改 `.github/workflows/deploy.yml` 中的分支配置。
 - `VITE_API_BASE` 必须与后端实际访问地址一致，否则前端无法请求接口。
+- 自动迁移只会执行本次提交新增的迁移文件（`apps/worker/migrations/*.sql`），请不要修改已上线的旧迁移文件。
 
 如何设置 GitHub Secrets：
 1. 打开你的 GitHub 仓库页面。
