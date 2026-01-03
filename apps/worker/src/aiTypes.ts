@@ -83,6 +83,17 @@ export type FmeaScoringOutput = {
   rows: FmeaScoringRow[];
 };
 
+export type ResidualFmeaRow = {
+  risk_id: string;
+  s: 1 | 3 | 6 | 9;
+  p: 1 | 3 | 6 | 9;
+  d: 1 | 3 | 6 | 9;
+};
+
+export type ResidualFmeaOutput = {
+  rows: ResidualFmeaRow[];
+};
+
 export type ScoredRiskItem = RiskItem & {
   s: 1 | 3 | 6 | 9;
   s_reason: string;
@@ -95,7 +106,15 @@ export type ScoredRiskItem = RiskItem & {
   need_actions: boolean;
 };
 
-export type ActionItem = {
+export type ReevaluatedRiskItem = RiskItem & {
+  s: 1 | 3 | 6 | 9;
+  p: 1 | 3 | 6 | 9;
+  d: 1 | 3 | 6 | 9;
+  rpn: number;
+  level: "极低" | "低" | "中" | "高";
+};
+
+export type ControlMeasureItem = {
   type:
     | "SOP/规程"
     | "培训与资质"
@@ -105,6 +124,14 @@ export type ActionItem = {
     | "双人复核/独立审核"
     | "其他";
   action_text: string;
+};
+
+export type ControlMeasureOutput = Array<{
+  risk_id: string;
+  actions: ControlMeasureItem[];
+}>;
+
+export type ActionItem = ControlMeasureItem & {
   owner_role: string;
   owner_dept: string;
   planned_date: string;

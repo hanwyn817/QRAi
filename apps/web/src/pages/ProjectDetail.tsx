@@ -35,7 +35,8 @@ const WORKFLOW_STEPS = [
   { id: "context", label: "准备上下文" },
   { id: "hazard_identification", label: "危害源识别" },
   { id: "fmea_scoring", label: "风险评价" },
-  { id: "action_generation", label: "生成改进措施" },
+  { id: "action_generation", label: "风险控制" },
+  { id: "control_plan", label: "制定控制计划" },
   { id: "rendering", label: "报告渲染" }
 ];
 type WorkflowStepStatus = "pending" | "running" | "done" | "error";
@@ -58,6 +59,22 @@ function formatMinute(value?: string | null) {
     minute: "2-digit"
   }).format(date);
 }
+
+const computeRpnLevel = (s?: number | null, p?: number | null, d?: number | null) => {
+  if (!s || !p || !d) {
+    return { rpn: null, level: null };
+  }
+  const rpn = s * p * d;
+  let level = "极低";
+  if (rpn >= 108) {
+    level = "高";
+  } else if (rpn >= 54) {
+    level = "中";
+  } else if (rpn >= 27) {
+    level = "低";
+  }
+  return { rpn, level };
+};
 
 export default function ProjectDetail() {
   const { id } = useParams();
@@ -267,7 +284,19 @@ export default function ProjectDetail() {
         }
       }
       const openStart = stack.length ? stack[stack.length - 1] : -1;
-      return { objects, openFragment: openStart >= 0 ? text.slice(openStart) : "" };
+      let openRowFragment = "";
+      for (let i = stack.length - 1; i >= 0; i -= 1) {
+        const fragment = text.slice(stack[i]);
+        if (fragment.includes("\"actions\"") && (fragment.includes("\"hazard\"") || fragment.includes("\"risk_id\""))) {
+          openRowFragment = fragment;
+          break;
+        }
+      }
+      return {
+        objects,
+        openFragment: openStart >= 0 ? text.slice(openStart) : "",
+        openRowFragment
+      };
     };
 
     const readStringValue = (fragment: string, key: string) => {
@@ -325,6 +354,110 @@ export default function ProjectDetail() {
       return Number.isFinite(num) ? num : null;
     };
 
+    const parseActionDrafts = (fragment: string) => {
+      if (!fragment) {
+        return [];
+      }
+      const actionsIndex = fragment.lastIndexOf("\"actions\"");
+      if (actionsIndex === -1) {
+        return [];
+      }
+      let cursor = fragment.indexOf("[", actionsIndex);
+      if (cursor === -1) {
+        return [];
+      }
+      const actionFragments: Array<{ fragment: string; partial: boolean }> = [];
+      let inString = false;
+      let escaped = false;
+      let arrayDepth = 0;
+      let braceDepth = 0;
+      let current = "";
+      for (let i = cursor; i < fragment.length; i += 1) {
+        const char = fragment[i];
+        if (escaped) {
+          if (braceDepth > 0) {
+            current += char;
+          }
+          escaped = false;
+          continue;
+        }
+        if (char === "\\") {
+          if (inString) {
+            if (braceDepth > 0) {
+              current += char;
+            }
+            escaped = true;
+          }
+          continue;
+        }
+        if (char === "\"") {
+          inString = !inString;
+          if (braceDepth > 0) {
+            current += char;
+          }
+          continue;
+        }
+        if (inString) {
+          if (braceDepth > 0) {
+            current += char;
+          }
+          continue;
+        }
+        if (char === "[") {
+          arrayDepth += 1;
+          continue;
+        }
+        if (char === "]") {
+          if (braceDepth > 0) {
+            current += char;
+          }
+          arrayDepth = Math.max(arrayDepth - 1, 0);
+          if (arrayDepth === 0) {
+            break;
+          }
+          continue;
+        }
+        if (arrayDepth >= 1) {
+          if (char === "{") {
+            if (braceDepth === 0) {
+              current = "{";
+            } else {
+              current += char;
+            }
+            braceDepth += 1;
+            continue;
+          }
+          if (char === "}") {
+            if (braceDepth > 0) {
+              current += char;
+              braceDepth -= 1;
+              if (braceDepth === 0) {
+                actionFragments.push({ fragment: current, partial: false });
+                current = "";
+              }
+            }
+            continue;
+          }
+          if (braceDepth > 0) {
+            current += char;
+          }
+        }
+      }
+      if (braceDepth > 0 && current) {
+        actionFragments.push({ fragment: current, partial: true });
+      }
+      return actionFragments
+        .map(({ fragment: actionFragment, partial }) => {
+          const type = readStringValue(actionFragment, "type");
+          const action_text = readStringValue(actionFragment, "action_text");
+          if (!type && !action_text) {
+            return null;
+          }
+          return { type, action_text, _partial: partial };
+        })
+        .filter(Boolean) as Array<{ type: string | null; action_text: string | null; _partial: boolean }>;
+    };
+
     const buildDraft = (fragment: string) => {
       if (!fragment) {
         return null;
@@ -351,6 +484,28 @@ export default function ProjectDetail() {
           : null;
       }
       if (activeStepId === "action_generation") {
+        const actions = parseActionDrafts(fragment);
+        const draft = {
+          risk_id: readStringValue(fragment, "risk_id"),
+          hazard: readStringValue(fragment, "hazard"),
+          s: readNumberValue(fragment, "s"),
+          p: readNumberValue(fragment, "p"),
+          d: readNumberValue(fragment, "d"),
+          rpn: readNumberValue(fragment, "rpn"),
+          level: readStringValue(fragment, "level"),
+          actions
+        };
+        return draft.hazard ||
+          draft.s ||
+          draft.p ||
+          draft.d ||
+          draft.rpn ||
+          draft.level ||
+          draft.actions.length > 0
+          ? { ...draft, _partial: true }
+          : null;
+      }
+      if (activeStepId === "control_plan") {
         const draft = {
           type: readStringValue(fragment, "type"),
           action_text: readStringValue(fragment, "action_text"),
@@ -365,8 +520,9 @@ export default function ProjectDetail() {
       return null;
     };
 
-    const { objects, openFragment } = extractObjects(raw);
-    const draft = buildDraft(openFragment);
+    const { objects, openFragment, openRowFragment } = extractObjects(raw);
+    const draftFragment = activeStepId === "action_generation" ? openRowFragment || openFragment : openFragment;
+    const draft = buildDraft(draftFragment);
     if (activeStepId === "hazard_identification") {
       const items = objects.filter((obj) => "failure_mode" in obj && "consequence" in obj && "dimension" in obj);
       const uniq = new Map<string, Record<string, any>>();
@@ -392,6 +548,41 @@ export default function ProjectDetail() {
       return { rows: draft ? [...results, draft] : results };
     }
     if (activeStepId === "action_generation") {
+      const rows = objects.filter((obj) => "hazard" in obj && ("s" in obj || "p" in obj || "d" in obj));
+      const uniq = new Map<string, Record<string, any>>();
+      rows.forEach((row, index) => {
+        const key = String(row.risk_id ?? row.hazard ?? index);
+        if (!uniq.has(key)) {
+          uniq.set(key, row);
+        }
+      });
+      let results = Array.from(uniq.values());
+      if (draft) {
+        const draftKey = String((draft as any).risk_id ?? (draft as any).hazard ?? results.length);
+        const findIndex = results.findIndex(
+          (row, index) => String((row as any).risk_id ?? (row as any).hazard ?? index) === draftKey
+        );
+        if (findIndex >= 0) {
+          const base = results[findIndex] ?? {};
+          const merged = { ...base, ...draft };
+          merged.actions =
+            (draft as any).actions && (draft as any).actions.length > 0
+              ? (draft as any).actions
+              : (base as any).actions ?? [];
+          merged.s = (draft as any).s ?? (base as any).s;
+          merged.p = (draft as any).p ?? (base as any).p;
+          merged.d = (draft as any).d ?? (base as any).d;
+          merged.rpn = (draft as any).rpn ?? (base as any).rpn;
+          merged.level = (draft as any).level ?? (base as any).level;
+          results = [...results];
+          results[findIndex] = merged;
+        } else {
+          results = [...results, draft];
+        }
+      }
+      return { rows: results };
+    }
+    if (activeStepId === "control_plan") {
       const rows = objects.filter((obj) => Array.isArray((obj as any).actions));
       const uniq = new Map<string, Record<string, any>>();
       rows.forEach((row) => {
@@ -674,7 +865,77 @@ export default function ProjectDetail() {
       );
     }
     if (activeStepId === "action_generation") {
+      const rows = Array.isArray((output as any)?.rows) ? (output as any).rows : [];
+      const stepStatus = workflowSteps.find((step) => step.id === "action_generation")?.status ?? "pending";
+      if (rows.length === 0) {
+        return (
+          <div className="stream-hint">
+            {stepStatus === "done" ? "未识别需要控制的风险项。" : "正在输出风险控制结果..."}
+          </div>
+        );
+      }
+      return (
+        <table className="workflow-table">
+          <thead>
+            <tr>
+              <th>序号</th>
+              <th>危害源</th>
+              <th>控制措施</th>
+              <th>S</th>
+              <th>P</th>
+              <th>D</th>
+              <th>RPN</th>
+              <th>等级</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row: any, index: number) => {
+              const actions = Array.isArray(row?.actions) ? row.actions : [];
+              const sValue = Number(row?.s);
+              const pValue = Number(row?.p);
+              const dValue = Number(row?.d);
+              const computed = computeRpnLevel(
+                Number.isFinite(sValue) ? sValue : null,
+                Number.isFinite(pValue) ? pValue : null,
+                Number.isFinite(dValue) ? dValue : null
+              );
+              const rpnValue = row?.rpn ?? computed.rpn;
+              const levelValue = row?.level ?? computed.level;
+              return (
+                <tr key={`${row?.risk_id ?? index}`} className={row?._partial ? "partial" : ""}>
+                  <td>{index + 1}</td>
+                  <td>{row?.hazard ?? (row?._partial ? "…" : "-")}</td>
+                  <td>
+                    {actions.length > 0
+                      ? actions.map((action: any, actionIndex: number) => (
+                          <div key={`${index}-${actionIndex}`}>
+                            {actionIndex + 1}.{" "}
+                            {action?.action_text
+                              ? `${action.action_text}${action._partial ? "…" : ""}`
+                              : row?._partial
+                                ? "…"
+                                : "-"}
+                          </div>
+                        ))
+                      : row?._partial
+                        ? "…"
+                        : "-"}
+                  </td>
+                  <td>{row?.s ?? (row?._partial ? "…" : "-")}</td>
+                  <td>{row?.p ?? (row?._partial ? "…" : "-")}</td>
+                  <td>{row?.d ?? (row?._partial ? "…" : "-")}</td>
+                  <td>{rpnValue ?? (row?._partial ? "…" : "-")}</td>
+                  <td>{levelValue ?? (row?._partial ? "…" : "-")}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      );
+    }
+    if (activeStepId === "control_plan") {
       const rows = Array.isArray(output as any) ? (output as any) : [];
+      const stepStatus = workflowSteps.find((step) => step.id === "control_plan")?.status ?? "pending";
       const flattened: Array<{ seq: number; action: any; partial?: boolean }> = [];
       rows.forEach((entry: any, index: number) => {
         const actions = Array.isArray(entry?.actions) ? entry.actions : [];
@@ -683,7 +944,11 @@ export default function ProjectDetail() {
         });
       });
       if (flattened.length === 0) {
-        return <div className="stream-hint">正在输出控制措施...</div>;
+        return (
+          <div className="stream-hint">
+            {stepStatus === "done" ? "暂无控制计划可生成。" : "正在输出控制计划..."}
+          </div>
+        );
       }
       return (
         <table className="workflow-table">

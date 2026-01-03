@@ -1,6 +1,7 @@
 import type { ModelRuntimeConfig } from "./types";
 import {
-  buildActionsPrompt,
+  buildRiskControlPrompt,
+  buildControlPlanPrompt,
   buildFmeaScoringPrompt,
   buildMarkdownRenderPrompt,
   buildHazardIdentificationFiveFactorsPrompt,
@@ -11,16 +12,25 @@ import {
 import { extractJsonBlock, safeJsonParse } from "./utils";
 import type {
   ActionOutput,
+  ControlMeasureOutput,
   FmeaScoringOutput,
   GeneratedReport,
   ReportInput,
   HazardIdentificationOutput,
+  ReevaluatedRiskItem,
   RiskItem,
   TokenUsage,
   WorkflowContext,
   ScoredRiskItem
 } from "./aiTypes";
-import { buildWorkflowContext, mergeScoring, validateActionsOutput, validateHazardIdentification } from "./workflow";
+import {
+  buildWorkflowContext,
+  mergeResidualScoring,
+  mergeScoring,
+  validateActionsOutput,
+  validateControlMeasuresOutput,
+  validateHazardIdentification
+} from "./workflow";
 
 const RISK_ID_PLACEHOLDER = "00000000-0000-0000-0000-000000000000";
 const FIVE_FACTOR_DIMENSIONS = ["人员", "设备与设施", "物料", "法规与程序", "环境"];
@@ -80,6 +90,7 @@ type StepName =
   | "mapping_validation"
   | "fmea_scoring"
   | "action_generation"
+  | "control_plan"
   | "rendering";
 
 type StreamHandlers = {
@@ -578,7 +589,62 @@ function parseFmeaScoring(raw: unknown, riskIds: string[]): FmeaScoringOutput {
   return { rows };
 }
 
-function parseActions(raw: unknown, requiredIds: string[], today: string): ActionOutput {
+function parseRiskControlOutput(raw: unknown, requiredIds: string[]) {
+  const record = expectRecord(raw, "风险控制输出");
+  if (!Array.isArray(record.rows)) {
+    throw new Error("风险控制输出 rows 不是数组");
+  }
+  const rows = record.rows.map((row, index) => {
+    const entry = expectRecord(row, `风险控制行#${index + 1}`);
+    ensureExactKeys(entry, ["risk_id", "hazard", "actions", "s", "p", "d"], `风险控制行#${index + 1}`);
+    if (typeof entry.risk_id !== "string" || !entry.risk_id.trim()) {
+      throw new Error(`风险控制行#${index + 1} risk_id 为空`);
+    }
+    if (typeof entry.hazard !== "string" || !entry.hazard.trim()) {
+      throw new Error(`风险控制行#${index + 1} hazard 为空`);
+    }
+    if (!Array.isArray(entry.actions)) {
+      throw new Error(`风险控制行#${index + 1} actions 不是数组`);
+    }
+    const score = (value: unknown, label: string) => {
+      if (value !== 1 && value !== 3 && value !== 6 && value !== 9) {
+        throw new Error(`风险控制行#${index + 1} ${label} 非法`);
+      }
+      return value as 1 | 3 | 6 | 9;
+    };
+    const actions = entry.actions.map((action, actionIndex) => {
+      const actionRecord = expectRecord(action, `控制措施#${index + 1}.${actionIndex + 1}`);
+      ensureExactKeys(actionRecord, ["type", "action_text"], `控制措施#${index + 1}.${actionIndex + 1}`);
+      const normalizedType = ACTION_TYPES.includes(actionRecord.type as string)
+        ? (actionRecord.type as string)
+        : "其他";
+      if (typeof actionRecord.action_text !== "string" || !actionRecord.action_text.trim()) {
+        throw new Error(`控制措施#${index + 1}.${actionIndex + 1} action_text 为空`);
+      }
+      return {
+        type: normalizedType as ControlMeasureOutput[number]["actions"][number]["type"],
+        action_text: actionRecord.action_text as string
+      };
+    });
+    return {
+      risk_id: entry.risk_id as string,
+      hazard: entry.hazard as string,
+      actions,
+      s: score(entry.s, "s"),
+      p: score(entry.p, "p"),
+      d: score(entry.d, "d")
+    };
+  });
+  const rowIds = new Set(rows.map((row) => row.risk_id));
+  for (const id of requiredIds) {
+    if (!rowIds.has(id)) {
+      throw new Error(`风险控制缺失风险项: ${id}`);
+    }
+  }
+  return { rows };
+}
+
+function parseControlPlan(raw: unknown, requiredIds: string[], today: string): ActionOutput {
   if (!Array.isArray(raw)) {
     throw new Error("控制措施输出不是数组");
   }
@@ -634,30 +700,27 @@ function parseActions(raw: unknown, requiredIds: string[], today: string): Actio
   return output.filter((entry) => required.has(entry.risk_id));
 }
 
-function ensureActionsForRisks(actions: ActionOutput, scoredItems: ScoredRiskItem[]): ActionOutput {
-  const actionMap = new Map(actions.map((entry) => [entry.risk_id, entry]));
-  const completed: ActionOutput = [...actions];
-  for (const item of scoredItems) {
-    if (!item.need_actions) {
-      continue;
-    }
-    if (actionMap.has(item.risk_id)) {
-      continue;
-    }
-    completed.push({
-      risk_id: item.risk_id,
-      actions: [
-        {
-          type: "其他",
-          action_text: `针对风险点“${item.failure_mode}”制定补充控制措施并形成可审计记录。`,
-          owner_role: "待定",
-          owner_dept: "待定",
-          planned_date: "TBD"
-        }
-      ]
-    });
+function mergePlanWithMeasures(measures: ControlMeasureOutput, plan: ActionOutput): ActionOutput {
+  const planMap = new Map<string, ActionOutput[number]["actions"]>();
+  for (const entry of plan) {
+    planMap.set(entry.risk_id, entry.actions);
   }
-  return completed;
+  return measures.map((entry) => {
+    const plannedActions = planMap.get(entry.risk_id) ?? [];
+    const mergedActions = entry.actions.map((action) => {
+      const matched = plannedActions.find(
+        (planAction) => planAction.action_text === action.action_text && planAction.type === action.type
+      );
+      return {
+        type: action.type,
+        action_text: action.action_text,
+        owner_role: matched?.owner_role ?? "待定",
+        owner_dept: matched?.owner_dept ?? "待定",
+        planned_date: matched?.planned_date ?? "TBD"
+      };
+    });
+    return { risk_id: entry.risk_id, actions: mergedActions };
+  });
 }
 
 function formatLocalDate(date: Date): string {
@@ -787,10 +850,20 @@ async function runWorkflow(
   ensureNotAborted(signal);
   handlers?.onStep?.("action_generation", "running");
   const needActions = scoredItems.filter((item) => item.need_actions);
-  let actions: ActionOutput = [];
+  let controlMeasures: ControlMeasureOutput = [];
+  let reevaluatedItems: ReevaluatedRiskItem[] = [];
+  let riskControlRows: Array<{
+    risk_id: string;
+    hazard: string;
+    actions: ControlMeasureOutput[number]["actions"];
+    s: number;
+    p: number;
+    d: number;
+    rpn: number;
+    level: string;
+  }> = [];
   if (needActions.length > 0) {
-    const today = formatLocalDate(new Date());
-    const actionPrompt = buildActionsPrompt({
+    const actionPrompt = buildRiskControlPrompt({
       scoredItemsJson: JSON.stringify({
         items: needActions.map((item) => ({
           risk_id: item.risk_id,
@@ -808,25 +881,87 @@ async function runWorkflow(
       scope: context.scope,
       background: context.background,
       objectiveBias: context.objectiveBias,
-      evidenceBlocks: context.evidenceBlocks,
-      today
+      evidenceBlocks: context.evidenceBlocks
     });
     const actionResponse = handlers?.onLlmDelta
-      ? await callJsonLlmStream<ActionOutput>(
+      ? await callJsonLlmStream<{ rows: Array<Record<string, unknown>> }>(
           models.llm,
           actionPrompt,
           "action_generation",
           handlers,
           signal
         )
-      : await callJsonLlm<ActionOutput>(models.llm, actionPrompt, signal);
+      : await callJsonLlm<{ rows: Array<Record<string, unknown>> }>(models.llm, actionPrompt, signal);
     usage = accumulateUsage(usage, actionResponse.usage);
     handlers?.onUsage?.(usage ?? {});
-    actions = parseActions(actionResponse.data, needActions.map((item) => item.risk_id), today);
-    actions = ensureActionsForRisks(actions, scoredItems);
-    validateActionsOutput(actions, scoredItems);
+    const riskControl = parseRiskControlOutput(actionResponse.data, needActions.map((item) => item.risk_id));
+    controlMeasures = riskControl.rows.map((row) => ({ risk_id: row.risk_id, actions: row.actions }));
+    validateControlMeasuresOutput(controlMeasures, scoredItems);
+
+    const residualItems = mergeResidualScoring(
+      needActions.map((item) => ({
+        risk_id: item.risk_id,
+        dimension_type: item.dimension_type,
+        dimension: item.dimension,
+        dimension_id: item.dimension_id,
+        failure_mode: item.failure_mode,
+        consequence: item.consequence
+      })),
+      {
+        rows: riskControl.rows.map((row) => ({
+          risk_id: row.risk_id,
+          s: row.s,
+          p: row.p,
+          d: row.d
+        }))
+      }
+    );
+    reevaluatedItems = residualItems;
+
+    const controlMeasuresMap = new Map(controlMeasures.map((entry) => [entry.risk_id, entry.actions]));
+    const reevaluatedMap = new Map(reevaluatedItems.map((item) => [item.risk_id, item]));
+    riskControlRows = needActions.map((item) => {
+      const reevaluated = reevaluatedMap.get(item.risk_id);
+      return {
+        risk_id: item.risk_id,
+        hazard: item.failure_mode,
+        actions: controlMeasuresMap.get(item.risk_id) ?? [],
+        s: reevaluated?.s ?? item.s,
+        p: reevaluated?.p ?? item.p,
+        d: reevaluated?.d ?? item.d,
+        rpn: reevaluated?.rpn ?? item.rpn,
+        level: reevaluated?.level ?? item.level
+      };
+    });
+  } else if (handlers?.onLlmDelta) {
+    handlers.onLlmDelta("action_generation", JSON.stringify({ rows: [] }));
   }
   handlers?.onStep?.("action_generation", "done");
+
+  ensureNotAborted(signal);
+  handlers?.onStep?.("control_plan", "running");
+  let actions: ActionOutput = [];
+  if (controlMeasures.length > 0) {
+    const today = formatLocalDate(new Date());
+    const planPrompt = buildControlPlanPrompt({
+      controlMeasuresJson: JSON.stringify(controlMeasures),
+      scope: context.scope,
+      background: context.background,
+      objectiveBias: context.objectiveBias,
+      today
+    });
+    const planResponse = handlers?.onLlmDelta
+      ? await callJsonLlmStream<ActionOutput>(models.llm, planPrompt, "control_plan", handlers, signal)
+      : await callJsonLlm<ActionOutput>(models.llm, planPrompt, signal);
+    usage = accumulateUsage(usage, planResponse.usage);
+    handlers?.onUsage?.(usage ?? {});
+    const rawPlan = parseControlPlan(planResponse.data, controlMeasures.map((item) => item.risk_id), today);
+    actions = mergePlanWithMeasures(controlMeasures, rawPlan);
+    validateActionsOutput(actions, scoredItems);
+  } else if (handlers?.onLlmDelta) {
+    handlers.onLlmDelta("control_plan", "[]");
+  }
+  handlers?.onStep?.("control_plan", "done");
 
   ensureNotAborted(signal);
   handlers?.onStep?.("rendering", "running");
@@ -855,6 +990,32 @@ async function runWorkflow(
     seq: actionSeqMap.get(entry.risk_id) ?? null,
     actions: entry.actions
   }));
+  const formatActionsText = (items: Array<{ action_text: string }>) => {
+    if (!items.length) {
+      return "—";
+    }
+    return items
+      .map((action, index) => {
+        const text = action.action_text.replace(/\|/g, "｜").replace(/\s+/g, " ").trim();
+        return `${index + 1}. ${text}`;
+      })
+      .join("<br>");
+  };
+  const renderReevaluatedItems = riskControlRows.map((row, index) => ({
+    seq: index + 1,
+    hazard: row.hazard,
+    actions_text: formatActionsText(row.actions),
+    actions: row.actions.map((action, actionIndex) => ({
+      order: actionIndex + 1,
+      action_text: action.action_text,
+      type: action.type
+    })),
+    s: row.s,
+    p: row.p,
+    d: row.d,
+    rpn: row.rpn,
+    level: row.level
+  }));
   const renderPrompt = buildMarkdownRenderPrompt({
     title: input.title,
     templateContent: input.templateContent ?? "",
@@ -863,7 +1024,8 @@ async function runWorkflow(
     objectiveBias: context.objectiveBias,
     riskItemsJson: JSON.stringify(renderItems),
     scoredItemsJson: JSON.stringify(renderScoredItems),
-    actionsJson: JSON.stringify(renderActions)
+    actionsJson: JSON.stringify(renderActions),
+    reevaluatedItemsJson: JSON.stringify(renderReevaluatedItems)
   });
   const renderResult = handlers?.onDelta
     ? await callMarkdownStream(models.llm, renderPrompt, handlers, signal)
@@ -878,6 +1040,8 @@ async function runWorkflow(
     risk_items: riskItems,
     fmea_rows: scoring.rows,
     scored_items: scoredItems,
+    control_measures: controlMeasures,
+    reevaluated_items: reevaluatedItems,
     actions,
     mapping_validation: mapping
   };

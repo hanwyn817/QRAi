@@ -1,11 +1,14 @@
 import type {
   ActionOutput,
+  ControlMeasureOutput,
   EvidenceChunk,
   FmeaScoringOutput,
   MappingValidation,
   ReportInput,
   HazardIdentificationOutput,
   RiskItem,
+  ReevaluatedRiskItem,
+  ResidualFmeaOutput,
   ScoredRiskItem,
   WorkflowContext,
   SourceText
@@ -647,6 +650,53 @@ export function mergeScoring(items: RiskItem[], scoring: FmeaScoringOutput): Sco
   });
 }
 
+export function mergeResidualScoring(items: RiskItem[], scoring: ResidualFmeaOutput): ReevaluatedRiskItem[] {
+  const rowMap = new Map(scoring.rows.map((row) => [row.risk_id, row]));
+  return items.map((item) => {
+    const row = rowMap.get(item.risk_id);
+    if (!row) {
+      throw new Error(`缺失再评估评分: ${item.risk_id}`);
+    }
+    const rpn = row.s * row.p * row.d;
+    const level = computeRpnLevel(rpn);
+    return {
+      ...item,
+      s: row.s,
+      p: row.p,
+      d: row.d,
+      rpn,
+      level
+    };
+  });
+}
+
+export function validateControlMeasuresOutput(actions: ControlMeasureOutput, scoredItems: ScoredRiskItem[]): void {
+  const needed = scoredItems.filter((item) => item.need_actions).map((item) => item.risk_id);
+  const requiredSet = new Set(needed);
+  const outputSet = new Set(actions.map((item) => item.risk_id));
+  for (const id of requiredSet) {
+    if (!outputSet.has(id)) {
+      throw new Error(`缺失风险控制措施: ${id}`);
+    }
+  }
+  for (const entry of actions) {
+    if (!requiredSet.has(entry.risk_id)) {
+      throw new Error(`出现不需要措施的 risk_id: ${entry.risk_id}`);
+    }
+    if (!entry.actions || entry.actions.length === 0) {
+      throw new Error(`风险 ${entry.risk_id} 未提供具体措施`);
+    }
+    for (const action of entry.actions) {
+      if (!action.action_text?.trim()) {
+        throw new Error(`风险 ${entry.risk_id} 存在空的措施内容`);
+      }
+      if (!ACTION_TYPES.includes(action.type)) {
+        throw new Error(`动作类型非法: ${action.type}`);
+      }
+    }
+  }
+}
+
 export function validateActionsOutput(actions: ActionOutput, scoredItems: ScoredRiskItem[]): void {
   const needed = scoredItems.filter((item) => item.need_actions).map((item) => item.risk_id);
   const requiredSet = new Set(needed);
@@ -666,6 +716,18 @@ export function validateActionsOutput(actions: ActionOutput, scoredItems: Scored
     for (const action of entry.actions) {
       if (!ACTION_TYPES.includes(action.type)) {
         throw new Error(`动作类型非法: ${action.type}`);
+      }
+      if (!action.action_text?.trim()) {
+        throw new Error(`风险 ${entry.risk_id} 存在空的措施内容`);
+      }
+      if (!action.owner_role?.trim()) {
+        throw new Error(`风险 ${entry.risk_id} 存在空的责任角色`);
+      }
+      if (!action.owner_dept?.trim()) {
+        throw new Error(`风险 ${entry.risk_id} 存在空的责任部门`);
+      }
+      if (!action.planned_date?.trim()) {
+        throw new Error(`风险 ${entry.risk_id} 存在空的计划完成日期`);
       }
     }
   }
