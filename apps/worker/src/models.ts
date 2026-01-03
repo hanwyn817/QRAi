@@ -2,7 +2,7 @@ import type { Env, ModelCategory, ModelRuntimeConfig, PlanTier } from "./types";
 import { nowIso } from "./utils";
 
 const MODEL_CATEGORIES: ModelCategory[] = ["text", "embedding", "rerank"];
-const PLAN_TIERS: PlanTier[] = ["free", "pro", "max"];
+export { normalizePlanTier } from "./plan";
 
 export function normalizeModelCategory(value: unknown): ModelCategory | null {
   if (typeof value !== "string") {
@@ -10,14 +10,6 @@ export function normalizeModelCategory(value: unknown): ModelCategory | null {
   }
   const trimmed = value.trim();
   return MODEL_CATEGORIES.includes(trimmed as ModelCategory) ? (trimmed as ModelCategory) : null;
-}
-
-export function normalizePlanTier(value: unknown): PlanTier | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return PLAN_TIERS.includes(trimmed as PlanTier) ? (trimmed as PlanTier) : null;
 }
 
 export function sanitizeBaseUrl(value: string): string {

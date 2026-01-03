@@ -1,5 +1,6 @@
 import type { Context, MiddlewareHandler } from "hono";
 import type { Env, User } from "./types";
+import { normalizePlanTier } from "./plan";
 import { daysFromNow, nowIso, parseCookies, randomToken, toBase64 } from "./utils";
 
 const encoder = new TextEncoder();
@@ -75,7 +76,7 @@ export async function getUserFromSession(env: Env, request: Request): Promise<Us
     id: session.id as string,
     email: session.email as string,
     role: (session.role as "admin" | "user") ?? "user",
-    plan: (session.plan as "free" | "pro" | "max") ?? "free"
+    plan: normalizePlanTier(session.plan) ?? "free"
   };
 }
 

@@ -153,6 +153,29 @@ button.danger {
   margin-bottom: 1rem;
 }
 
+.quota-toast {
+  position: fixed;
+  top: 5.5rem;
+  right: 2rem;
+  z-index: 20;
+  background: #fff4d6;
+  border: 1px solid #f0c673;
+  color: #6b4f00;
+  padding: 0.6rem 0.9rem;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(77, 59, 0, 0.12);
+  pointer-events: none;
+}
+
+@media (max-width: 768px) {
+  .quota-toast {
+    left: 1rem;
+    right: 1rem;
+    top: 4.8rem;
+    text-align: center;
+  }
+}
+
 .auth-footer {
   margin-top: 1.5rem;
   display: flex;
@@ -355,10 +378,26 @@ button.danger {
   flex-wrap: wrap;
 }
 
+.user-meta {
+  display: grid;
+  gap: 0.25rem;
+}
+
 .user-actions {
   display: flex;
   gap: 0.6rem;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.quota-edit {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.quota-edit input {
+  width: 5.2rem;
 }
 
 .toggle {

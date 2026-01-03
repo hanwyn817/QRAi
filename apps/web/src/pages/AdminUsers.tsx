@@ -14,6 +14,9 @@ type AdminUser = {
   plan: "free" | "pro" | "max";
   created_at: string;
   project_count?: number;
+  quota_remaining?: number | null;
+  quota_cycle_end?: string | null;
+  quota_is_unlimited?: boolean;
 };
 
 function formatMinute(value?: string | null) {
@@ -33,12 +36,38 @@ function formatMinute(value?: string | null) {
   }).format(date);
 }
 
+function formatDate(value?: string | null) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+function formatQuotaRemaining(user: AdminUser) {
+  if (user.plan === "max" || user.quota_is_unlimited) {
+    return "不限";
+  }
+  if (typeof user.quota_remaining === "number") {
+    return `${user.quota_remaining}`;
+  }
+  return "-";
+}
+
 export default function AdminUsers() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [form, setForm] = useState({ email: "", password: "", plan: "free" as const });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [quotaEdits, setQuotaEdits] = useState<Record<string, string>>({});
 
   const loadUsers = async () => {
     const result = await api.listUsers();
@@ -50,6 +79,28 @@ export default function AdminUsers() {
   useEffect(() => {
     loadUsers();
   }, []);
+
+  useEffect(() => {
+    setQuotaEdits((prev) => {
+      const next: Record<string, string> = { ...prev };
+      const seen = new Set<string>();
+      users.forEach((user) => {
+        seen.add(user.id);
+        if (user.plan === "max" || user.quota_is_unlimited) {
+          delete next[user.id];
+          return;
+        }
+        const value = typeof user.quota_remaining === "number" ? String(user.quota_remaining) : "0";
+        next[user.id] = value;
+      });
+      Object.keys(next).forEach((key) => {
+        if (!seen.has(key)) {
+          delete next[key];
+        }
+      });
+      return next;
+    });
+  }, [users]);
 
   const handleCreate = async () => {
     if (!form.email.trim() || !form.password.trim()) {
@@ -102,6 +153,26 @@ export default function AdminUsers() {
       return;
     }
     setNotice("用户已删除");
+    await loadUsers();
+  };
+
+  const handleQuotaUpdate = async (userId: string) => {
+    const raw = quotaEdits[userId] ?? "";
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
+      setError("剩余次数必须为非负整数");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    const result = await api.updateUserQuotaRemaining(userId, value);
+    setLoading(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setNotice("剩余次数已更新");
     await loadUsers();
   };
 
@@ -174,12 +245,37 @@ export default function AdminUsers() {
             <div className="user-grid">
               {users.map((user) => (
                 <div key={user.id} className="user-card">
-                  <div>
+                  <div className="user-meta">
                     <strong>{user.email}</strong>
                     <div className="muted small">创建：{formatMinute(user.created_at)}</div>
                     <div className="muted small">项目数：{user.project_count ?? 0}</div>
+                    <div className="muted small">剩余次数：{formatQuotaRemaining(user)}</div>
+                    <div className="muted small">截止：{formatDate(user.quota_cycle_end)}</div>
                   </div>
                   <div className="user-actions">
+                    {user.plan === "max" || user.quota_is_unlimited ? (
+                      <span className="muted small">Max 用户不限次数</span>
+                    ) : (
+                      <div className="quota-edit">
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={quotaEdits[user.id] ?? ""}
+                          onChange={(e) =>
+                            setQuotaEdits((prev) => ({ ...prev, [user.id]: e.target.value }))
+                          }
+                          disabled={loading}
+                        />
+                        <button
+                          className="mini-button"
+                          onClick={() => handleQuotaUpdate(user.id)}
+                          disabled={loading}
+                        >
+                          更新次数
+                        </button>
+                      </div>
+                    )}
                     <select
                       value={user.plan}
                       onChange={(e) => handlePlanChange(user.id, e.target.value as "free" | "pro" | "max")}

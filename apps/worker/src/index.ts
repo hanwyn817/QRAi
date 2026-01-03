@@ -5,12 +5,16 @@ import { nowIso, putR2Json, putR2Text, readR2Text, safeJsonParse } from "./utils
 import { generateReport, generateReportStream } from "./ai";
 import { renderDocx } from "./exporters";
 import { ensureDefaultModel, fetchDefaultModelForPlan, fetchModelByIdForPlan, listAdminModels, listModelNamesByPlan, listPublicModelsForPlan, normalizeModelCategory, normalizePlanTier, sanitizeBaseUrl, setDefaultModel, setModelAccess } from "./models";
+import { consumeUserQuota, getUserQuotaSnapshot, resetUserQuotaForPlan, setUserQuotaRemaining } from "./quota";
 
 const app = new Hono<{ Bindings: Env; Variables: { user: User | null } }>();
 const ALLOWED_EVAL_TOOLS = new Set(["FMEA"]);
 
 const normalizeEvalTool = (value: string | null | undefined) => {
   return value && ALLOWED_EVAL_TOOLS.has(value) ? value : "FMEA";
+};
+const resolveUserPlan = (user: User | null | undefined): PlanTier => {
+  return normalizePlanTier(user?.plan) ?? "free";
 };
 const normalizeProcessSteps = (
   raw: unknown
@@ -181,11 +185,13 @@ app.post("/api/auth/register", async (c) => {
   const userId = crypto.randomUUID();
   const role = adminKey && c.env.ADMIN_BOOTSTRAP_KEY && adminKey === c.env.ADMIN_BOOTSTRAP_KEY ? "admin" : "user";
   const plan = "free";
+  const createdAt = nowIso();
   await c.env.DB.prepare(
     "INSERT INTO users (id, email, password_hash, password_salt, role, plan, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
   )
-    .bind(userId, email, hash, salt, role, plan, nowIso())
+    .bind(userId, email, hash, salt, role, plan, createdAt)
     .run();
+  await resetUserQuotaForPlan(c.env, userId, plan, createdAt);
 
   const session = await createSession(c.env, userId);
   setSessionCookie(c, session.token, session.expiresAt, c.env);
@@ -221,9 +227,10 @@ app.post("/api/auth/login", async (c) => {
     return c.json({ error: "邮箱或密码错误" }, 401);
   }
 
+  const plan = normalizePlanTier(userRow.plan) ?? "free";
   const session = await createSession(c.env, userRow.id as string);
   setSessionCookie(c, session.token, session.expiresAt, c.env);
-  return c.json({ id: userRow.id, email: userRow.email, role: userRow.role, plan: userRow.plan ?? "free" });
+  return c.json({ id: userRow.id, email: userRow.email, role: userRow.role, plan });
 });
 
 app.post("/api/auth/logout", async (c) => {
@@ -232,9 +239,14 @@ app.post("/api/auth/logout", async (c) => {
   return c.json({ ok: true });
 });
 
-app.get("/api/me", requireAuth, (c) => {
+app.get("/api/me", requireAuth, async (c) => {
   const user = c.get("user");
-  return c.json({ user });
+  if (!user) {
+    return c.json({ user: null }, 401);
+  }
+  const plan = resolveUserPlan(user);
+  const quota = await getUserQuotaSnapshot(c.env, user.id, plan);
+  return c.json({ user: { ...user, plan }, quota });
 });
 
 app.get("/api/templates", requireAuth, async (c) => {
@@ -322,7 +334,7 @@ app.post("/api/admin/templates/import", requireAdmin, async (c) => {
 
 app.get("/api/models", requireAuth, async (c) => {
   const user = c.get("user");
-  const plan = (user?.plan ?? "free") as "free" | "pro" | "max";
+  const plan = resolveUserPlan(user);
   const result = await listPublicModelsForPlan(c.env, plan);
   return c.json(result);
 });
@@ -754,7 +766,19 @@ app.get("/api/admin/users", requireAdmin, async (c) => {
       "(SELECT COUNT(1) FROM projects p WHERE p.owner_id = u.id) as project_count " +
       "FROM users u ORDER BY u.created_at DESC"
   ).all();
-  return c.json({ users: rows.results ?? [] });
+  const users = [];
+  for (const row of rows.results ?? []) {
+    const plan = normalizePlanTier(row.plan) ?? "free";
+    const quota = await getUserQuotaSnapshot(c.env, row.id as string, plan);
+    users.push({
+      ...row,
+      plan,
+      quota_remaining: quota.remaining,
+      quota_cycle_end: quota.cycleEnd,
+      quota_is_unlimited: quota.isUnlimited
+    });
+  }
+  return c.json({ users });
 });
 
 app.post("/api/admin/users", requireAdmin, async (c) => {
@@ -774,11 +798,13 @@ app.post("/api/admin/users", requireAdmin, async (c) => {
 
   const { hash, salt } = await hashPassword(password);
   const userId = crypto.randomUUID();
+  const createdAt = nowIso();
   await c.env.DB.prepare(
     "INSERT INTO users (id, email, password_hash, password_salt, role, plan, created_at) VALUES (?, ?, ?, ?, 'user', ?, ?)"
   )
-    .bind(userId, email, hash, salt, plan, nowIso())
+    .bind(userId, email, hash, salt, plan, createdAt)
     .run();
+  await resetUserQuotaForPlan(c.env, userId, plan, plan === "free" ? createdAt : undefined);
 
   return c.json({ id: userId, email, role: "user", plan });
 });
@@ -790,12 +816,40 @@ app.patch("/api/admin/users/:id", requireAdmin, async (c) => {
   if (!plan) {
     return c.json({ error: "用户等级不合法" }, 400);
   }
-  const row = await c.env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(userId).first();
+  const row = await c.env.DB.prepare("SELECT id, plan, created_at FROM users WHERE id = ?").bind(userId).first();
   if (!row) {
     return c.json({ error: "用户不存在" }, 404);
   }
+  const previousPlan = normalizePlanTier(row.plan) ?? "free";
   await c.env.DB.prepare("UPDATE users SET plan = ? WHERE id = ?").bind(plan, userId).run();
+  if (plan !== previousPlan) {
+    const createdAt = typeof row.created_at === "string" ? row.created_at : undefined;
+    const anchor = plan === "free" ? createdAt : undefined;
+    await resetUserQuotaForPlan(c.env, userId, plan, anchor);
+  }
   return c.json({ ok: true });
+});
+
+app.patch("/api/admin/users/:id/quota", requireAdmin, async (c) => {
+  const userId = c.req.param("id");
+  const body = await c.req.json().catch(() => null);
+  const remaining = Number(body?.remaining);
+  if (!Number.isFinite(remaining) || remaining < 0 || !Number.isInteger(remaining)) {
+    return c.json({ error: "剩余次数必须为非负整数" }, 400);
+  }
+  const row = await c.env.DB.prepare("SELECT id, plan FROM users WHERE id = ?").bind(userId).first();
+  if (!row) {
+    return c.json({ error: "用户不存在" }, 404);
+  }
+  const plan = normalizePlanTier(row.plan) ?? "free";
+  if (plan === "max") {
+    return c.json({ error: "Max 用户不可设置次数" }, 400);
+  }
+  const result = await setUserQuotaRemaining(c.env, userId, plan, remaining);
+  if (!result.ok) {
+    return c.json({ error: "Max 用户不可设置次数" }, 400);
+  }
+  return c.json({ ok: true, quota: result.snapshot });
 });
 
 app.delete("/api/admin/users/:id", requireAdmin, async (c) => {
@@ -815,6 +869,7 @@ app.delete("/api/admin/users/:id", requireAdmin, async (c) => {
   }
 
   await c.env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
+  await c.env.DB.prepare("DELETE FROM user_quotas WHERE user_id = ?").bind(userId).run();
   await c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(userId).run();
   return c.json({ ok: true });
 });
@@ -908,7 +963,7 @@ app.patch("/api/projects/:id/inputs", requireAuth, async (c) => {
   }
 
   const user = c.get("user");
-  const plan = (user?.plan ?? "free") as "free" | "pro" | "max";
+  const plan = resolveUserPlan(user);
 
   const body = await c.req.json().catch(() => null);
   const scope = typeof body?.scope === "string" ? body.scope.trim() : null;
@@ -1047,7 +1102,7 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
   let templateContent = typeof body?.templateContent === "string" ? body.templateContent : null;
   const requestedTextModelId = typeof body?.textModelId === "string" ? body.textModelId.trim() : null;
   const user = c.get("user");
-  const plan = (user?.plan ?? "free") as "free" | "pro" | "max";
+  const plan = resolveUserPlan(user);
 
   const inputs = await c.env.DB.prepare(
     "SELECT scope, background, objective, risk_method, eval_tool, process_steps, template_id, text_model_id FROM project_inputs WHERE project_id = ?"
@@ -1108,6 +1163,11 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
   );
   if (!textModel) {
     return c.json({ error: modelError ?? "模型不可用" }, 400);
+  }
+  const userId = c.get("user")?.id as string;
+  const quotaResult = await consumeUserQuota(c.env, userId, plan);
+  if (!quotaResult.ok) {
+    return c.json({ error: "本月评估次数已用完", quota: quotaResult.snapshot }, 429);
   }
   if (requestedTextModelId && requestedTextModelId !== storedTextModelId) {
     await c.env.DB.prepare("UPDATE project_inputs SET text_model_id = ?, updated_at = ? WHERE project_id = ?")
@@ -1186,7 +1246,7 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
       .bind("completed", nowIso(), projectId)
       .run();
 
-    return c.json({ id: reportId, version: nextVersion, status: "completed" });
+    return c.json({ id: reportId, version: nextVersion, status: "completed", quota: quotaResult.snapshot });
   } catch (error) {
     const message = error instanceof Error ? error.message : "未知错误";
     await c.env.DB.prepare("UPDATE reports SET status = ?, error_message = ? WHERE id = ?")
@@ -1209,7 +1269,7 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
   let templateContent = typeof body?.templateContent === "string" ? body.templateContent : null;
   const requestedTextModelId = typeof body?.textModelId === "string" ? body.textModelId.trim() : null;
   const user = c.get("user");
-  const plan = (user?.plan ?? "free") as "free" | "pro" | "max";
+  const plan = resolveUserPlan(user);
 
   const inputs = await c.env.DB.prepare(
     "SELECT scope, background, objective, risk_method, eval_tool, process_steps, template_id, text_model_id FROM project_inputs WHERE project_id = ?"
@@ -1237,6 +1297,11 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
   );
   if (!textModel) {
     return c.json({ error: modelError ?? "模型不可用" }, 400);
+  }
+  const userId = c.get("user")?.id as string;
+  const quotaResult = await consumeUserQuota(c.env, userId, plan);
+  if (!quotaResult.ok) {
+    return c.json({ error: "本月评估次数已用完", quota: quotaResult.snapshot }, 429);
   }
   if (requestedTextModelId && requestedTextModelId !== storedTextModelId) {
     await c.env.DB.prepare("UPDATE project_inputs SET text_model_id = ?, updated_at = ? WHERE project_id = ?")
@@ -1324,7 +1389,7 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
         );
       };
 
-      send("start", { reportId, version: nextVersion, status: "running" });
+      send("start", { reportId, version: nextVersion, status: "running", quota: quotaResult.snapshot });
 
       (async () => {
         try {

@@ -60,6 +60,21 @@ function formatMinute(value?: string | null) {
   }).format(date);
 }
 
+function formatDate(value?: string | null) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
 const computeRpnLevel = (s?: number | null, p?: number | null, d?: number | null) => {
   if (!s || !p || !d) {
     return { rpn: null, level: null };
@@ -143,6 +158,7 @@ export default function ProjectDetail() {
   });
   const [dragOver, setDragOver] = useState({ sop: false, literature: false });
   const [message, setMessage] = useState<string | null>(null);
+  const [quotaToast, setQuotaToast] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [highlightedReportId, setHighlightedReportId] = useState<string | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
@@ -152,6 +168,7 @@ export default function ProjectDetail() {
   const stepStartTimesRef = useRef<Record<string, number>>({});
   const abortControllerRef = useRef<AbortController | null>(null);
   const hasReportContentRef = useRef(false);
+  const quotaToastTimerRef = useRef<number | null>(null);
   const hasWorkflowActivity = workflowSteps.some((step) => step.status !== "pending");
   const hasLlmOutput = Object.keys(stepOutputs).length > 0;
   const showWorkflowPanel = isStreaming || Boolean(streamContent) || hasLlmOutput || hasWorkflowActivity;
@@ -162,6 +179,14 @@ export default function ProjectDetail() {
     () => workflowSteps.find((step) => step.status === "running")?.id ?? null,
     [workflowSteps]
   );
+
+  useEffect(() => {
+    return () => {
+      if (quotaToastTimerRef.current) {
+        window.clearTimeout(quotaToastTimerRef.current);
+      }
+    };
+  }, []);
 
   const normalizeContextStage = (message: string): string | null => {
     if (!message) {
@@ -1148,6 +1173,16 @@ export default function ProjectDetail() {
     await loadProject();
   };
 
+  const showQuotaToast = (text: string) => {
+    setQuotaToast(text);
+    if (quotaToastTimerRef.current) {
+      window.clearTimeout(quotaToastTimerRef.current);
+    }
+    quotaToastTimerRef.current = window.setTimeout(() => {
+      setQuotaToast(null);
+    }, 3500);
+  };
+
   const handleCreateReport = async () => {
     if (!projectId) {
       return;
@@ -1228,6 +1263,21 @@ export default function ProjectDetail() {
         }
         if (eventName === "start") {
           setMessage("评估已开始，报告生成中...");
+          const quota = payload.quota as {
+            remaining?: number | null;
+            cycleEnd?: string;
+            isUnlimited?: boolean;
+          } | null;
+          if (quota) {
+            const remainingLabel =
+              quota.isUnlimited ? "不限" : typeof quota.remaining === "number" ? `${quota.remaining}` : "-";
+            const cycleEndLabel = quota.cycleEnd ? formatDate(quota.cycleEnd) : "-";
+            if (cycleEndLabel && cycleEndLabel !== "-") {
+              showQuotaToast(`截至${cycleEndLabel}剩余 ${remainingLabel} 次`);
+            } else {
+              showQuotaToast(`剩余 ${remainingLabel} 次`);
+            }
+          }
         }
         if (eventName === "step") {
           const stepId = typeof payload.step === "string" ? payload.step : "";
@@ -1510,6 +1560,7 @@ export default function ProjectDetail() {
           ) : null}
         </div>
       </div>
+      {quotaToast ? <div className="quota-toast">{quotaToast}</div> : null}
       {message ? <div className="info">{message}</div> : null}
 
       <section className="card">

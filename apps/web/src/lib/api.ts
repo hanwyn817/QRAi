@@ -54,7 +54,10 @@ export const api = {
     return request<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
   },
   async getMe() {
-    return request<{ user: { id: string; email: string; role: "admin" | "user"; plan?: "free" | "pro" | "max" } }>("/api/me");
+    return request<{
+      user: { id: string; email: string; role: "admin" | "user"; plan?: "free" | "pro" | "max" };
+      quota?: { remaining: number | null; cycleEnd: string; isUnlimited: boolean };
+    }>("/api/me");
   },
   async listTemplates() {
     return request<{
@@ -122,6 +125,9 @@ export const api = {
         plan: "free" | "pro" | "max";
         created_at: string;
         project_count?: number;
+        quota_remaining?: number | null;
+        quota_cycle_end?: string | null;
+        quota_is_unlimited?: boolean;
       }>;
     }>("/api/admin/users");
   },
@@ -139,6 +145,15 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ plan })
     });
+  },
+  async updateUserQuotaRemaining(id: string, remaining: number) {
+    return request<{ ok: boolean; quota: { remaining: number | null; cycleEnd: string; isUnlimited: boolean } }>(
+      `/api/admin/users/${id}/quota`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ remaining })
+      }
+    );
   },
   async deleteUser(id: string) {
     return request<{ ok: boolean }>(`/api/admin/users/${id}`, { method: "DELETE" });

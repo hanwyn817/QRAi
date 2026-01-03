@@ -10,6 +10,14 @@ CREATE TABLE users (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE user_quotas (
+  user_id TEXT PRIMARY KEY,
+  cycle_start TEXT NOT NULL,
+  remaining INTEGER,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
