@@ -82,6 +82,8 @@ if (!dbName) {
 const baseArgs = ["d1", "execute", dbName];
 if (options.local) {
   baseArgs.push("--local");
+} else {
+  baseArgs.push("--remote");
 }
 if (options.env) {
   baseArgs.push("--env", options.env);

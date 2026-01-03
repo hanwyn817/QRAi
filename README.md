@@ -115,21 +115,26 @@ npm --workspace apps/worker run d1:prod:init
 
 说明：
 - 采用常规迁移策略，按顺序执行未执行的迁移文件（基于 `schema_migrations` 判断）。
+- 默认执行远程生产 D1；本地迁移请使用 `npm --workspace apps/worker run d1:local:init`。
 - 如果以后新增了字段/表：
-  1. 在 `apps/worker/migrations/` 新建一个递增编号的 SQL 文件（例如 `0008_add_xxx.sql`）。
+  1. 在 `apps/worker/migrations/` 新建一个递增编号的 SQL 文件（例如 `0010_add_xxx.sql`，按现有最大编号继续递增）。
   2. 把需要的 `ALTER TABLE` / `CREATE TABLE` 写进去。
-  3. 线上执行一次：`wrangler d1 execute qrai --file apps/worker/migrations/0008_add_xxx.sql`，或直接运行 `npm --workspace apps/worker run d1:prod:init`。
-  4. 若为已有库首次引入迁移版本表，可先执行一次基线标记（不执行 SQL，仅写入迁移记录）：`npm --workspace apps/worker run d1:prod:init -- --baseline`。
+  3. 线上执行一次：`wrangler d1 execute qrai-db --remote --env production --file apps/worker/migrations/0008_add_xxx.sql`，或直接运行 `npm --workspace apps/worker run d1:prod:init`。
 
 ### 3.4 配置 Workers 环境变量与密钥
 
 推荐使用 Secrets 管理敏感信息（用于生产环境）：
 
 ```bash
+cd apps/worker
 wrangler secret put ADMIN_BOOTSTRAP_KEY --env production
 ```
 
 执行后会提示你输入密钥，直接在终端输入（例如 `123456`）并回车即可。
+
+说明：
+- 需要在 `apps/worker` 目录执行（或使用 `--config apps/worker/wrangler.toml`）。
+- `--env production` 需要 `apps/worker/wrangler.toml` 存在 `[env.production]` 区块。
 
 非敏感变量建议写入 `apps/worker/wrangler.toml` 的 `[env.production].vars`（如果没有该区块就手动新增）：
 
@@ -141,7 +146,7 @@ vars = { APP_ENV = "production", APP_ORIGIN = "https://your-domain.com" }
 ### 3.5 部署 Workers
 
 ```bash
-npm --workspace apps/worker run deploy
+npm --workspace apps/worker run deploy -- --env production
 ```
 
 部署成功后会输出 Worker 的访问域名（通常是 `https://<name>.<account>.workers.dev`），下一步会用它配置前端的 `VITE_API_BASE`。
@@ -153,6 +158,11 @@ npm --workspace apps/worker run deploy
 - 构建命令：`npm --workspace apps/web run build`
 - 输出目录：`apps/web/dist`
 - 环境变量：`VITE_API_BASE=https://your-worker-domain`
+
+说明：
+- `npm --workspace apps/web run build` 只是本地构建，不会生成域名。
+- 只有在 Cloudflare Pages 触发部署并成功完成后，才会分配 `https://xxx.pages.dev` 域名。
+- 若希望自动部署，请在 Pages 中连接仓库，或使用下方的 GitHub Actions 流程（见 3.8）。
 
 首次部署完成后会得到一个 Pages 域名（例如 `https://xxx.pages.dev`）。
 拿到域名后：

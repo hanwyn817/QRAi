@@ -1,8 +1,27 @@
-import mammoth from "mammoth";
-import { getDocument, GlobalWorkerOptions } from "pdfjs-dist/legacy/build/pdf";
-import workerSrc from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
+let mammothPromise: Promise<typeof import("mammoth")> | null = null;
+let pdfjsPromise:
+  | Promise<{ getDocument: typeof import("pdfjs-dist/legacy/build/pdf").getDocument }>
+  | null = null;
 
-GlobalWorkerOptions.workerSrc = workerSrc;
+async function loadMammoth() {
+  if (!mammothPromise) {
+    mammothPromise = import("mammoth");
+  }
+  const module = await mammothPromise;
+  return module.default ?? module;
+}
+
+async function loadPdfjs() {
+  if (!pdfjsPromise) {
+    pdfjsPromise = (async () => {
+      const pdfjs = await import("pdfjs-dist/legacy/build/pdf");
+      const worker = await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url");
+      pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+      return { getDocument: pdfjs.getDocument };
+    })();
+  }
+  return pdfjsPromise;
+}
 
 export type ExtractTextResult = {
   text: string;
@@ -26,6 +45,7 @@ export async function extractTextFromFile(file: File): Promise<ExtractTextResult
 
   if (extension === "docx") {
     const buffer = await file.arrayBuffer();
+    const mammoth = await loadMammoth();
     const result = await mammoth.extractRawText({ arrayBuffer: buffer });
     const text = result.value ?? "";
     return { text, meta: { type: "docx", extractedChars: text.length } };
@@ -36,6 +56,7 @@ export async function extractTextFromFile(file: File): Promise<ExtractTextResult
     const data = new Uint8Array(buffer);
     const errors: string[] = [];
     const extractFromPdf = async (disableWorker: boolean) => {
+      const { getDocument } = await loadPdfjs();
       const pdf = await getDocument({ data, disableWorker }).promise;
       let text = "";
       let emptyPages = 0;
