@@ -1261,6 +1261,17 @@ export default function ProjectDetail() {
         if (!payload) {
           return;
         }
+        if (eventName === "queued") {
+          const position = Number(payload.position ?? 0);
+          const totalQueued = Number(payload.totalQueued ?? 0);
+          const concurrency = Number(payload.concurrency ?? 0);
+          const positionLabel = position > 0 ? `当前排队第 ${position} 位` : "已进入排队";
+          const concurrencyLabel = concurrency > 0 ? `并发上限 ${concurrency}` : "不限并发";
+          const totalLabel = totalQueued > 0 ? `队列中共有 ${totalQueued} 个任务` : "";
+          const detail = [positionLabel, concurrencyLabel, totalLabel].filter(Boolean).join("，");
+          setMessage(`排队中：${detail}`);
+          return;
+        }
         if (eventName === "start") {
           setMessage("评估已开始，报告生成中...");
           const quota = payload.quota as {

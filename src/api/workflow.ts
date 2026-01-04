@@ -26,7 +26,75 @@ const ACTION_TYPES = [
   "双人复核/独立审核",
   "其他"
 ];
-const EMBEDDING_CACHE = new Map<string, number[]>();
+
+const parseNonNegativeInt = (value: string | undefined, fallback: number): number => {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
+const EMBEDDING_CACHE_MAX = parseNonNegativeInt(process.env.EMBEDDING_CACHE_MAX, 2000);
+const EMBEDDING_CACHE_TTL_MS = parseNonNegativeInt(process.env.EMBEDDING_CACHE_TTL_MS, 21600000);
+
+type EmbeddingCacheEntry = {
+  embedding: number[];
+  expiresAt: number;
+};
+
+const EMBEDDING_CACHE = new Map<string, EmbeddingCacheEntry>();
+
+function pruneExpiredEmbeddings(): void {
+  if (EMBEDDING_CACHE_TTL_MS <= 0 || EMBEDDING_CACHE.size === 0) {
+    return;
+  }
+  const now = Date.now();
+  for (const [key, entry] of EMBEDDING_CACHE) {
+    if (entry.expiresAt <= now) {
+      EMBEDDING_CACHE.delete(key);
+    } else {
+      break;
+    }
+  }
+}
+
+function pruneOldestEmbeddings(): void {
+  while (EMBEDDING_CACHE.size > EMBEDDING_CACHE_MAX && EMBEDDING_CACHE_MAX > 0) {
+    const oldestKey = EMBEDDING_CACHE.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      break;
+    }
+    EMBEDDING_CACHE.delete(oldestKey);
+  }
+}
+
+function getCachedEmbedding(key: string): number[] | null {
+  if (EMBEDDING_CACHE_MAX <= 0) {
+    return null;
+  }
+  const entry = EMBEDDING_CACHE.get(key);
+  if (!entry) {
+    return null;
+  }
+  if (EMBEDDING_CACHE_TTL_MS > 0 && entry.expiresAt <= Date.now()) {
+    EMBEDDING_CACHE.delete(key);
+    return null;
+  }
+  EMBEDDING_CACHE.delete(key);
+  EMBEDDING_CACHE.set(key, entry);
+  return entry.embedding;
+}
+
+function setCachedEmbedding(key: string, embedding: number[]): void {
+  if (EMBEDDING_CACHE_MAX <= 0) {
+    return;
+  }
+  if (!embedding || embedding.length === 0) {
+    return;
+  }
+  pruneExpiredEmbeddings();
+  const expiresAt = EMBEDDING_CACHE_TTL_MS > 0 ? Date.now() + EMBEDDING_CACHE_TTL_MS : Number.POSITIVE_INFINITY;
+  EMBEDDING_CACHE.set(key, { embedding, expiresAt });
+  pruneOldestEmbeddings();
+}
 
 export function summarizeTemplateRequirements(templateContent: string | null): string {
   const raw = templateContent?.trim();
@@ -287,8 +355,8 @@ async function getEmbeddings(
   const missingIndices: number[] = [];
 
   keys.forEach((key, index) => {
-    const cached = EMBEDDING_CACHE.get(key);
-    if (cached && cached.length > 0) {
+    const cached = getCachedEmbedding(key);
+    if (cached) {
       results[index] = cached;
     } else {
       // 缓存缺失或缓存为异常空向量时，重新请求
@@ -356,7 +424,7 @@ async function getEmbeddings(
       results[originalIndex] = embedding;
       // 仅缓存有效向量，避免“空向量”污染缓存导致后续全部得分为 0
       if (embedding.length > 0) {
-        EMBEDDING_CACHE.set(key, embedding);
+        setCachedEmbedding(key, embedding);
       }
     });
   }

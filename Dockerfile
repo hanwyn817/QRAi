@@ -25,6 +25,7 @@ RUN npm ci --omit=dev
 COPY --from=web-builder /app/web/dist /app/web/dist
 
 ENV NODE_ENV=production
+ENV NODE_OPTIONS=--max-old-space-size=768
 ENV PORT=8787
 
 CMD ["npm", "run", "start"]

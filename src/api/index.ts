@@ -9,6 +9,90 @@ import { consumeUserQuota, getUserQuotaSnapshot, resetUserQuotaForPlan, setUserQ
 
 const app = new Hono<{ Bindings: Env; Variables: { user: User | null } }>();
 const ALLOWED_EVAL_TOOLS = new Set(["FMEA"]);
+const REPORT_CONCURRENCY = (() => {
+  const raw = process.env.REPORT_CONCURRENCY;
+  if (!raw) {
+    return 1;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1;
+})();
+let activeReportCount = 0;
+const reportQueue: Array<() => void> = [];
+
+type ReportSlotWaiter = {
+  queued: boolean;
+  position: number;
+  totalQueued: number;
+  wait: Promise<void>;
+};
+
+function createReportSlotWaiter(signal?: AbortSignal): ReportSlotWaiter {
+  if (REPORT_CONCURRENCY <= 0) {
+    return { queued: false, position: 0, totalQueued: 0, wait: Promise.resolve() };
+  }
+  if (activeReportCount < REPORT_CONCURRENCY) {
+    activeReportCount += 1;
+    return { queued: false, position: 0, totalQueued: 0, wait: Promise.resolve() };
+  }
+  let resolveWait!: () => void;
+  let rejectWait!: (error: Error) => void;
+  const wait = new Promise<void>((resolve, reject) => {
+    resolveWait = resolve;
+    rejectWait = reject;
+  });
+  const grant = () => {
+    signal?.removeEventListener("abort", onAbort);
+    activeReportCount += 1;
+    resolveWait();
+  };
+  const onAbort = () => {
+    const index = reportQueue.indexOf(grant);
+    if (index >= 0) {
+      reportQueue.splice(index, 1);
+    }
+    rejectWait(new Error("请求已取消"));
+  };
+  const position = reportQueue.length + 1;
+  reportQueue.push(grant);
+  const totalQueued = reportQueue.length;
+  if (signal) {
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  }
+  return { queued: true, position, totalQueued, wait };
+}
+
+function releaseReportSlot(): void {
+  if (REPORT_CONCURRENCY <= 0) {
+    return;
+  }
+  activeReportCount = Math.max(0, activeReportCount - 1);
+  const next = reportQueue.shift();
+  if (next) {
+    next();
+  }
+}
+
+async function withReportSlot<T>(
+  signal: AbortSignal | undefined,
+  work: () => Promise<T>,
+  onQueued?: (info: { position: number; totalQueued: number; concurrency: number }) => void
+): Promise<T> {
+  const waiter = createReportSlotWaiter(signal);
+  if (waiter.queued) {
+    onQueued?.({ position: waiter.position, totalQueued: waiter.totalQueued, concurrency: REPORT_CONCURRENCY });
+  }
+  await waiter.wait;
+  try {
+    return await work();
+  } finally {
+    releaseReportSlot();
+  }
+}
 
 const normalizeEvalTool = (value: string | null | undefined) => {
   return value && ALLOWED_EVAL_TOOLS.has(value) ? value : "FMEA";
@@ -1203,21 +1287,23 @@ app.post("/api/projects/:id/reports", requireAuth, async (c) => {
     .run();
 
   try {
-    const report = await generateReport({ llm: textModel, embedding: embeddingModel }, {
-      title: project.title as string,
-      scope: (inputs?.scope as string) ?? null,
-      background: (inputs?.background as string) ?? null,
-      objective: (inputs?.objective as string) ?? null,
-      riskMethod: (inputs?.risk_method as string) ?? null,
-      evalTool: normalizeEvalTool((inputs?.eval_tool as string) ?? null),
-      processSteps: parseProcessStepsFromDb((inputs as any)?.process_steps),
-      templateContent: templateContent ?? null,
-      sopTexts,
-      literatureTexts,
-      sopSources,
-      literatureSources,
-      sourceFiles
-    });
+    const report = await withReportSlot(c.req.raw.signal, () =>
+      generateReport({ llm: textModel, embedding: embeddingModel }, {
+        title: project.title as string,
+        scope: (inputs?.scope as string) ?? null,
+        background: (inputs?.background as string) ?? null,
+        objective: (inputs?.objective as string) ?? null,
+        riskMethod: (inputs?.risk_method as string) ?? null,
+        evalTool: normalizeEvalTool((inputs?.eval_tool as string) ?? null),
+        processSteps: parseProcessStepsFromDb((inputs as any)?.process_steps),
+        templateContent: templateContent ?? null,
+        sopTexts,
+        literatureTexts,
+        sopSources,
+        literatureSources,
+        sourceFiles
+      })
+    );
 
     const reportKey = `projects/${projectId}/reports/${reportId}.md`;
     await putR2Text(c.env.BUCKET, reportKey, report.markdown);
@@ -1383,94 +1469,112 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
   const stream = new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
+      let closed = false;
+      const closeStream = () => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+        }
+      };
       const send = (event: string, data: Record<string, unknown>) => {
         controller.enqueue(
           encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
         );
       };
 
-      send("start", { reportId, version: nextVersion, status: "running", quota: quotaResult.snapshot });
-
       (async () => {
         try {
-          let report = await generateReportStream(
-            { llm: textModel, embedding: embeddingModel },
-            {
-              title: project.title as string,
-              scope: (inputs?.scope as string) ?? null,
-              background: (inputs?.background as string) ?? null,
-              objective: (inputs?.objective as string) ?? null,
-              riskMethod: (inputs?.risk_method as string) ?? null,
-              evalTool: normalizeEvalTool((inputs?.eval_tool as string) ?? null),
-              processSteps: parseProcessStepsFromDb((inputs as any)?.process_steps),
-              templateContent: templateContent ?? null,
-              sopTexts,
-              literatureTexts,
-              sopSources,
-              literatureSources,
-              sourceFiles
-            },
-            {
-              onDelta: (delta) => {
-                send("delta", { delta });
+          await withReportSlot(abortController.signal, async () => {
+            send("start", { reportId, version: nextVersion, status: "running", quota: quotaResult.snapshot });
+            const report = await generateReportStream(
+              { llm: textModel, embedding: embeddingModel },
+              {
+                title: project.title as string,
+                scope: (inputs?.scope as string) ?? null,
+                background: (inputs?.background as string) ?? null,
+                objective: (inputs?.objective as string) ?? null,
+                riskMethod: (inputs?.risk_method as string) ?? null,
+                evalTool: normalizeEvalTool((inputs?.eval_tool as string) ?? null),
+                processSteps: parseProcessStepsFromDb((inputs as any)?.process_steps),
+                templateContent: templateContent ?? null,
+                sopTexts,
+                literatureTexts,
+                sopSources,
+                literatureSources,
+                sourceFiles
               },
-              onUsage: (usage) => {
-                send("usage", usage);
+              {
+                onDelta: (delta) => {
+                  send("delta", { delta });
+                },
+                onUsage: (usage) => {
+                  send("usage", usage);
+                },
+                onStep: (step, status) => {
+                  send("step", { step, status });
+                },
+                onLlmDelta: (step, delta) => {
+                  send("llm", { step, delta });
+                },
+                onContextStage: (message) => {
+                  send("context", { message });
+                },
+                onContextStages: (messages) => {
+                  send("context_stages", { messages });
+                },
+                onContextMeta: (meta) => {
+                  send("context_meta", meta);
+                },
+                onContextEvidence: (items) => {
+                  send("context_evidence", { items });
+                }
               },
-              onStep: (step, status) => {
-                send("step", { step, status });
-              },
-              onLlmDelta: (step, delta) => {
-                send("llm", { step, delta });
-              },
-              onContextStage: (message) => {
-                send("context", { message });
-              },
-              onContextStages: (messages) => {
-                send("context_stages", { messages });
-              },
-              onContextMeta: (meta) => {
-                send("context_meta", meta);
-              },
-              onContextEvidence: (items) => {
-                send("context_evidence", { items });
-              }
-            },
-            { signal: abortController.signal }
-          );
+              { signal: abortController.signal }
+            );
 
-          if (aborted || abortController.signal.aborted) {
-            await markAborted();
-            return;
-          }
+            if (aborted || abortController.signal.aborted) {
+              await markAborted();
+              return;
+            }
 
-          if (aborted || abortController.signal.aborted) {
-            await markAborted();
-            return;
-          }
+            if (aborted || abortController.signal.aborted) {
+              await markAborted();
+              return;
+            }
 
-          const reportKey = `projects/${projectId}/reports/${reportId}.md`;
-          await putR2Text(c.env.BUCKET, reportKey, report.markdown);
+            const reportKey = `projects/${projectId}/reports/${reportId}.md`;
+            await putR2Text(c.env.BUCKET, reportKey, report.markdown);
 
-          await c.env.DB.prepare(
-            "UPDATE reports SET status = ?, md_key = ?, json_key = ?, prompt_tokens = ?, completion_tokens = ?, total_tokens = ? WHERE id = ?"
-          )
-            .bind(
-              "completed",
-              reportKey,
-              null,
-              report.usage?.prompt_tokens ?? null,
-              report.usage?.completion_tokens ?? null,
-              report.usage?.total_tokens ?? null,
-              reportId
+            await c.env.DB.prepare(
+              "UPDATE reports SET status = ?, md_key = ?, json_key = ?, prompt_tokens = ?, completion_tokens = ?, total_tokens = ? WHERE id = ?"
             )
-            .run();
+              .bind(
+                "completed",
+                reportKey,
+                null,
+                report.usage?.prompt_tokens ?? null,
+                report.usage?.completion_tokens ?? null,
+                report.usage?.total_tokens ?? null,
+                reportId
+              )
+              .run();
 
-          await c.env.DB.prepare("UPDATE projects SET status = ?, updated_at = ? WHERE id = ?")
-            .bind("completed", nowIso(), projectId)
-            .run();
+            await c.env.DB.prepare("UPDATE projects SET status = ?, updated_at = ? WHERE id = ?")
+              .bind("completed", nowIso(), projectId)
+              .run();
 
-          send("done", { reportId, version: nextVersion, status: "completed", usage: report.usage ?? null });
+            send("done", { reportId, version: nextVersion, status: "completed", usage: report.usage ?? null });
+          }, (info) => {
+            send("queued", {
+              position: info.position,
+              totalQueued: info.totalQueued,
+              concurrency: info.concurrency
+            });
+          });
         } catch (error) {
           if (aborted || abortController.signal.aborted) {
             await markAborted();
@@ -1482,7 +1586,7 @@ app.post("/api/projects/:id/reports/stream", requireAuth, async (c) => {
             send("error", { message });
           }
         } finally {
-          controller.close();
+          closeStream();
         }
       })();
     },

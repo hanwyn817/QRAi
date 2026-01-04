@@ -773,7 +773,10 @@ async function runWorkflow(
       filename: item.filename ?? null
     }))
   );
-  await sleep(3000, signal);
+  const contextDelayMs = Number.parseInt(process.env.CONTEXT_STAGE_DELAY_MS ?? "0", 10);
+  if (Number.isFinite(contextDelayMs) && contextDelayMs > 0) {
+    await sleep(contextDelayMs, signal);
+  }
   handlers?.onStep?.("context", "done");
 
   ensureNotAborted(signal);

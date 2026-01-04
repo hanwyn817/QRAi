@@ -1,4 +1,5 @@
-import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync } from "node:fs";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { Bucket, BucketObject } from "./api/types";
 
@@ -12,10 +13,10 @@ const buildObject = (filePath: string, contentType?: string): BucketObject => {
   return {
     body: createReadStream(filePath),
     async text() {
-      return readFileSync(filePath, "utf8");
+      return await readFile(filePath, "utf8");
     },
     async arrayBuffer() {
-      const buffer = readFileSync(filePath);
+      const buffer = await readFile(filePath);
       return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
     },
     writeHttpMetadata(headers) {
@@ -63,7 +64,7 @@ export class LocalBucket implements Bucket {
           : Buffer.from(
               value instanceof ArrayBuffer ? value : value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
             );
-    writeFileSync(filePath, payload);
+    await writeFile(filePath, payload);
     if (options?.httpMetadata?.contentType) {
       this.metadata.set(key, { contentType: options.httpMetadata.contentType });
     }
@@ -72,7 +73,7 @@ export class LocalBucket implements Bucket {
   async delete(key: string): Promise<void> {
     const filePath = this.resolvePath(key);
     if (existsSync(filePath)) {
-      rmSync(filePath);
+      await rm(filePath);
     }
     this.metadata.delete(key);
   }
