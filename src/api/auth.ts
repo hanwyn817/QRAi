@@ -1,7 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import type { Env, User } from "./types";
 import { normalizePlanTier } from "./plan";
-import { daysFromNow, nowIso, parseCookies, randomToken, toBase64 } from "./utils";
+import { daysFromNow, fromBase64, nowIso, parseCookies, randomToken, toBase64 } from "./utils";
 
 const encoder = new TextEncoder();
 const PASSWORD_ITERATIONS = 100_000;
@@ -27,7 +27,7 @@ export async function hashPassword(password: string): Promise<{ hash: string; sa
 }
 
 export async function verifyPassword(password: string, hash: string, salt: string): Promise<boolean> {
-  const saltBytes = Uint8Array.from(atob(salt), (c) => c.charCodeAt(0));
+  const saltBytes = fromBase64(salt);
   const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
   const bits = await crypto.subtle.deriveBits(
     {

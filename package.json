@@ -1,17 +1,23 @@
 {
-  "name": "qrai",
+  "name": "qrai-mono",
   "private": true,
-  "workspaces": [
-    "apps/web",
-    "apps/worker"
-  ],
+  "type": "module",
   "scripts": {
-    "dev:web": "npm --workspace apps/web run dev",
-    "dev:worker": "npm --workspace apps/worker run dev",
-    "dev:worker:local": "npm --workspace apps/worker run dev:local",
-    "build:web": "npm --workspace apps/web run build",
-    "build:worker": "npm --workspace apps/worker run build",
-    "lint:web": "npm --workspace apps/web run lint",
-    "lint:worker": "npm --workspace apps/worker run lint"
+    "dev": "tsx src/server.ts",
+    "start": "tsx src/server.ts",
+    "migrate": "node scripts/run-migrations.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "ali-oss": "^6.22.0",
+    "better-sqlite3": "^11.6.0",
+    "dotenv": "^16.4.5",
+    "hono": "^4.5.6",
+    "markdown-docx": "^1.5.1",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.5",
+    "typescript": "^5.5.4"
   }
 }

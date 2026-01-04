@@ -2,10 +2,9 @@ node_modules
 .DS_Store
 .env
 .env.*
-apps/worker/.dev.vars
-apps/web/.env
-apps/worker/dist
-apps/web/dist
+!.env.example
+web/.env
+web/dist
 .wrangler
 wrangler.lock
 *.log
@@ -17,3 +16,4 @@ wrangler.lock
 *.db
 *.db-wal
 *.db-shm
+data/

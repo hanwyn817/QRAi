@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  qrai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8787:8787"
+    env_file:
+      - .env
+    volumes:
+      - qrai-data:/data
+    restart: unless-stopped
+
+volumes:
+  qrai-data:
