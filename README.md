@@ -112,6 +112,14 @@ docker compose up -d --build
 docker compose exec qrai npm run migrate
 ```
 
+### 4.3 测试 OSS 连接与读写
+
+在已配置 `.env` 的环境中执行：
+
+```bash
+npm run test:oss
+```
+
 ## 5 目录结构
 
 - `src`：后端 API（Hono）

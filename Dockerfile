@@ -1,12 +1,12 @@
 FROM node:20-alpine AS web-builder
 
 WORKDIR /app/web
-COPY web/package.json web/package.json
-COPY web/package-lock.json web/package-lock.json
-COPY web/tsconfig.json web/tsconfig.json
-COPY web/vite.config.ts web/vite.config.ts
-COPY web/index.html web/index.html
-COPY web/src web/src
+COPY web/package.json package.json
+COPY web/package-lock.json package-lock.json
+COPY web/tsconfig.json tsconfig.json
+COPY web/vite.config.ts vite.config.ts
+COPY web/index.html index.html
+COPY web/src src
 RUN npm ci
 RUN npm run build
 

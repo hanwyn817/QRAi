@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "tsx src/server.ts",
     "start": "tsx src/server.ts",
-    "migrate": "node scripts/run-migrations.js"
+    "migrate": "node scripts/run-migrations.js",
+    "test:oss": "node scripts/test-oss.js"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
