@@ -96,23 +96,40 @@ OSS_ACCESS_KEY_ID=your-oss-access-key-id
 OSS_ACCESS_KEY_SECRET=your-oss-access-key-secret
 ```
 
-### 4.2 启动容器
+### 4.2 构建并推送镜像（可选，用于面板拉取）
+
+本地构建并推送到 Docker Hub：
+
+```bash
+docker buildx build --platform linux/amd64 -t hanwyn/qrai:latest --push .
+```
+
+### 4.3 启动容器
 
 1) 在服务器创建 `.env`（不要提交到 Git），把上面的生产环境变量写进去。  
    建议 `DB_PATH=/data/qrai.sqlite`，以便数据写入 Docker 挂载卷。  
+   当前 `docker-compose.yml` 使用命名卷 `qrai-data:/data`，容器内数据会写到 `/data`。  
+   如果你想改为宿主机目录挂载，可以改成 `./data:/data`（并确保宿主机目录有写权限）。  
 2) 启动：
 
 ```bash
 docker compose up -d --build
 ```
 
-3) 初始化数据库：
+3) 初始化数据库（在宿主机执行，下发到容器内运行；`qrai` 为服务名，若你改了请替换）：
 
 ```bash
 docker compose exec qrai npm run migrate
 ```
 
-### 4.3 测试 OSS 连接与读写
+如果你已进入容器终端，也可以执行：
+
+```bash
+cd /app
+npm run migrate
+```
+
+### 4.4 测试 OSS 连接与读写
 
 在已配置 `.env` 的环境中执行：
 
