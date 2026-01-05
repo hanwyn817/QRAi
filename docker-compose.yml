@@ -2,9 +2,7 @@ version: "3.8"
 
 services:
   qrai:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: hanwyn/qrai:latest
     ports:
       - "8787:8787"
     env_file:
