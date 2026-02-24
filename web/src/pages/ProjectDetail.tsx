@@ -3,6 +3,11 @@ import { useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { extractTextFromFile } from "../lib/fileText";
 import { renderMarkdown } from "../lib/markdown";
+import { ReportHeader } from "../components/project/ReportHeader";
+import { ModelSettings } from "../components/project/ModelSettings";
+import { UploadPanel } from "../components/project/UploadPanel";
+import { ProjectSettings } from "../components/project/ProjectSettings";
+import { GenerationPanel } from "../components/project/GenerationPanel";
 
 const RISK_METHODS = ["五因素法", "流程法"];
 const EVAL_TOOLS = [
@@ -589,7 +594,7 @@ export default function ProjectDetail() {
         );
         if (findIndex >= 0) {
           const base = results[findIndex] ?? {};
-          const merged = { ...base, ...draft };
+          const merged: any = { ...base, ...draft };
           merged.actions =
             (draft as any).actions && (draft as any).actions.length > 0
               ? (draft as any).actions
@@ -933,15 +938,15 @@ export default function ProjectDetail() {
                   <td>
                     {actions.length > 0
                       ? actions.map((action: any, actionIndex: number) => (
-                          <div key={`${index}-${actionIndex}`}>
-                            {actionIndex + 1}.{" "}
-                            {action?.action_text
-                              ? `${action.action_text}${action._partial ? "…" : ""}`
-                              : row?._partial
-                                ? "…"
-                                : "-"}
-                          </div>
-                        ))
+                        <div key={`${index}-${actionIndex}`}>
+                          {actionIndex + 1}.{" "}
+                          {action?.action_text
+                            ? `${action.action_text}${action._partial ? "…" : ""}`
+                            : row?._partial
+                              ? "…"
+                              : "-"}
+                        </div>
+                      ))
                       : row?._partial
                         ? "…"
                         : "-"}
@@ -1524,53 +1529,27 @@ export default function ProjectDetail() {
     await loadProject();
   };
 
-  const renderModelSelect = (className?: string) => {
-    const disabled = textModels.length === 0;
-    return (
-      <div className={`model-select ${className ?? ""}`.trim()}>
-        <span className="muted small">评估模型（OpenAI 兼容）</span>
-        <select
-          value={resolvedTextModelId}
-          onChange={(e) => setInputs((prev) => ({ ...prev, textModelId: e.target.value }))}
-          disabled={disabled || loading}
-        >
-          {disabled ? (
-            <option value="">暂无可用模型</option>
-          ) : (
-            textModels.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.name} · {model.model_name}
-                {model.is_default ? "（默认）" : ""}
-              </option>
-            ))
-          )}
-        </select>
-      </div>
-    );
-  };
-
   return (
     <div className="project-detail">
-      <div className="project-header">
-        <div>
-          <h2>{projectTitle}</h2>
-          <p className="muted">状态：{status}</p>
-        </div>
-        <div className="header-actions">
-          <button className="ghost" onClick={handleSaveAll} disabled={loading}>
-            保存项目设置
-          </button>
-          {renderModelSelect("inline")}
-          <button onClick={handleCreateReport} disabled={startDisabled}>
-            {loading ? "评估中..." : "开始评估"}
-          </button>
-          {isStreaming ? (
-            <button className="danger" onClick={handleStopReport}>
-              停止评估
-            </button>
-          ) : null}
-        </div>
-      </div>
+      <ReportHeader
+        title={projectTitle}
+        status={status}
+        loading={loading}
+        isStreaming={isStreaming}
+        startDisabled={startDisabled}
+        onSaveAll={handleSaveAll}
+        onCreateReport={handleCreateReport}
+        onStopReport={handleStopReport}
+        modelSelectNode={
+          <ModelSettings
+            className="inline"
+            models={textModels}
+            value={resolvedTextModelId}
+            onChange={(val) => setInputs((prev) => ({ ...prev, textModelId: val }))}
+            disabled={loading}
+          />
+        }
+      />
       {quotaToast ? <div className="quota-toast">{quotaToast}</div> : null}
       {message ? <div className="info">{message}</div> : null}
 
@@ -1582,191 +1561,38 @@ export default function ProjectDetail() {
         </div>
 
         <div className="input-grid">
-          <div className="form-section span-6">
-            <h4>评估范围</h4>
-            <textarea
-              value={inputs.scope}
-              onChange={(e) => setInputs((prev) => ({ ...prev, scope: e.target.value }))}
-              placeholder="简要描述本次风险评估覆盖的工艺、区域或系统"
-            />
-          </div>
+          <ProjectSettings
+            inputs={inputs as any}
+            onInputChange={(key, value) => setInputs((prev) => ({ ...prev, [key]: value }))}
+            riskMethods={RISK_METHODS}
+            evalTools={EVAL_TOOLS}
+          />
 
-          <div className="form-section span-6">
-            <h4>评估目标</h4>
-            <textarea
-              value={inputs.objective}
-              onChange={(e) => setInputs((prev) => ({ ...prev, objective: e.target.value }))}
-              placeholder="例如期望的风险结论或改进方向"
-            />
-          </div>
+          <UploadPanel
+            title="上传 SOP 文件"
+            description="用于体现现有控制措施与管理规定，可选上传。"
+            type="sop"
+            files={files}
+            dragOver={dragOver.sop}
+            uploadState={uploadState.sop}
+            progress={sopProgress}
+            onDragChange={(type, active) => setDragOver((prev) => ({ ...prev, [type]: active }))}
+            onDropFiles={handleUploadFiles}
+            onDeleteFile={handleDeleteFile}
+          />
 
-          <div className="form-section span-12">
-            <h4>背景信息</h4>
-            <textarea
-              value={inputs.background}
-              onChange={(e) => setInputs((prev) => ({ ...prev, background: e.target.value }))}
-              placeholder="例如产品类型、车间类型、评估主题背景"
-            />
-          </div>
-
-          <div className="form-section span-12 config-panel">
-            <h4>评估方法设置</h4>
-            <div className="config-grid">
-              <label>
-                危害源识别方法
-                <select
-                  value={inputs.riskMethod}
-                  onChange={(e) => setInputs((prev) => ({ ...prev, riskMethod: e.target.value }))}
-                >
-                  {RISK_METHODS.map((method) => (
-                    <option key={method} value={method}>
-                      {method}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                风险评估工具
-                <select
-                  value={inputs.evalTool}
-                  onChange={(e) => setInputs((prev) => ({ ...prev, evalTool: e.target.value }))}
-                >
-                  {EVAL_TOOLS.map((tool) => (
-                    <option key={tool.value} value={tool.value} disabled={tool.disabled}>
-                      {tool.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {inputs.riskMethod.includes("流程") ? (
-                <label style={{ gridColumn: "1 / -1" }}>
-                  流程步骤
-                  <textarea
-                    value={inputs.processStepsText}
-                    onChange={(e) => setInputs((prev) => ({ ...prev, processStepsText: e.target.value }))}
-                    placeholder={`每行一个步骤，例如：\n原料接收\n生产准备\n生产操作\n成品放行`}
-                  />
-                  <span className="muted">每行一个步骤，仅用于流程法危害源识别。</span>
-                </label>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="form-section file-panel span-6">
-            <h4>上传 SOP 文件</h4>
-            <p className="muted">用于体现现有控制措施与管理规定，可选上传。</p>
-            <div
-              className={`drop-zone ${dragOver.sop ? "active" : ""}`}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragOver((prev) => ({ ...prev, sop: true }));
-              }}
-              onDragLeave={() => setDragOver((prev) => ({ ...prev, sop: false }))}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragOver((prev) => ({ ...prev, sop: false }));
-                if (e.dataTransfer.files.length > 0) {
-                  handleUploadFiles("sop", e.dataTransfer.files);
-                }
-              }}
-            >
-              <input
-                className="file-input"
-                type="file"
-                accept=".pdf,.docx,.txt,.md"
-                multiple
-                onChange={(e) => {
-                  const selected = e.target.files;
-                  if (selected) {
-                    handleUploadFiles("sop", selected);
-                  }
-                  e.currentTarget.value = "";
-                }}
-              />
-              <div className="drop-hint">拖拽文件到此处，或点击选择</div>
-              {uploadState.sop.active ? (
-                <div className="upload-progress">
-                  <div className="upload-label">
-                    正在上传 {uploadState.sop.done}/{uploadState.sop.total}
-                  </div>
-                  <div className="upload-track">
-                    <div className="upload-bar" style={{ width: `${sopProgress}%` }} />
-                  </div>
-                </div>
-              ) : null}
-            </div>
-            <div className="file-list">
-              {files.filter((f) => f.type === "sop").map((file) => (
-                <div key={file.id} className="file-item">
-                  <div>
-                    <span>{file.filename}</span>
-                    <span className="muted"> · {file.status}</span>
-                  </div>
-                  <button className="text-button" onClick={() => handleDeleteFile(file.id, file.filename)}>
-                    删除
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="form-section file-panel span-6">
-            <h4>上传文献资料</h4>
-            <p className="muted">用于识别风险点与控制措施，可选上传。</p>
-            <div
-              className={`drop-zone ${dragOver.literature ? "active" : ""}`}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragOver((prev) => ({ ...prev, literature: true }));
-              }}
-              onDragLeave={() => setDragOver((prev) => ({ ...prev, literature: false }))}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragOver((prev) => ({ ...prev, literature: false }));
-                if (e.dataTransfer.files.length > 0) {
-                  handleUploadFiles("literature", e.dataTransfer.files);
-                }
-              }}
-            >
-              <input
-                className="file-input"
-                type="file"
-                accept=".pdf,.docx,.txt,.md"
-                multiple
-                onChange={(e) => {
-                  const selected = e.target.files;
-                  if (selected) {
-                    handleUploadFiles("literature", selected);
-                  }
-                  e.currentTarget.value = "";
-                }}
-              />
-              <div className="drop-hint">拖拽文件到此处，或点击选择</div>
-              {uploadState.literature.active ? (
-                <div className="upload-progress">
-                  <div className="upload-label">
-                    正在上传 {uploadState.literature.done}/{uploadState.literature.total}
-                  </div>
-                  <div className="upload-track">
-                    <div className="upload-bar" style={{ width: `${literatureProgress}%` }} />
-                  </div>
-                </div>
-              ) : null}
-            </div>
-            <div className="file-list">
-              {files.filter((f) => f.type === "literature").map((file) => (
-                <div key={file.id} className="file-item">
-                  <div>
-                    <span>{file.filename}</span>
-                    <span className="muted"> · {file.status}</span>
-                  </div>
-                  <button className="text-button" onClick={() => handleDeleteFile(file.id, file.filename)}>
-                    删除
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
+          <UploadPanel
+            title="上传文献资料"
+            description="用于识别风险点与控制措施，可选上传。"
+            type="literature"
+            files={files}
+            dragOver={dragOver.literature}
+            uploadState={uploadState.literature}
+            progress={literatureProgress}
+            onDragChange={(type, active) => setDragOver((prev) => ({ ...prev, [type]: active }))}
+            onDropFiles={handleUploadFiles}
+            onDeleteFile={handleDeleteFile}
+          />
 
           <div className="form-section span-12">
             <div className="section-header compact">
@@ -1833,7 +1659,13 @@ export default function ProjectDetail() {
                 保存项目设置
               </button>
               <div className="action-row">
-                {renderModelSelect("compact")}
+                <ModelSettings
+                  className="compact"
+                  models={textModels}
+                  value={resolvedTextModelId}
+                  onChange={(val) => setInputs((prev) => ({ ...prev, textModelId: val }))}
+                  disabled={loading}
+                />
                 <button onClick={handleCreateReport} disabled={startDisabled}>
                   {loading ? "评估中..." : "开始评估"}
                 </button>
@@ -1854,74 +1686,24 @@ export default function ProjectDetail() {
           <span className="muted">点击版本在新窗口查看详情</span>
         </div>
         {showWorkflowPanel ? (
-          <div className="stream-panel" ref={streamPanelRef}>
-            <div className="stream-header">
-              <strong>{isStreaming ? "实时生成预览" : "评估流程回顾"}</strong>
-              <span className="stream-meta">
-                <span className="muted">· 平均速度 {activeStats.speed} 字/秒</span>
-                <span className="muted">· 已生成 {activeStats.totalChars} 字</span>
-              </span>
-            </div>
-            <div className="workflow-grid">
-              <div className="workflow-steps" ref={stepsRef}>
-                {workflowSteps.map((step) => (
-                  <div
-                    key={step.id}
-                    className={`workflow-step ${step.status} ${activeStepId === step.id ? "selected" : ""}`}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => {
-                      setActiveStepId(step.id);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        setActiveStepId(step.id);
-                      }
-                    }}
-                  >
-                    <span className="step-dot" />
-                    <div className="step-info">
-                      <strong>{step.label}</strong>
-                      <span className="muted">
-                        {step.status === "pending"
-                          ? "待执行"
-                          : step.status === "running"
-                            ? step.id === "context" && contextStageMessage
-                              ? `进行中：${contextStageMessage}`
-                              : "进行中"
-                            : step.status === "error"
-                              ? `异常：${stepErrors[step.id] ?? globalErrorMessage ?? "未知错误"}`
-                              : "完成"}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div
-                className="stream-body"
-                ref={streamRef}
-                style={stepsHeight ? { height: `${stepsHeight}px`, maxHeight: `${stepsHeight}px` } : undefined}
-                onScroll={() => {
-                  const el = streamRef.current;
-                  if (!el) {
-                    return;
-                  }
-                  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-                  autoScrollRef.current = atBottom;
-                }}
-              >
-                {activeStepId === "rendering" ? (
-                  streamContent ? (
-                    <div className="markdown-body" dangerouslySetInnerHTML={{ __html: streamHtml }} />
-                  ) : (
-                    <div className="stream-hint">工作流执行中，报告生成中...</div>
-                  )
-                ) : (
-                  renderStructuredTable()
-                )}
-              </div>
-            </div>
-          </div>
+          <GenerationPanel
+            isStreaming={isStreaming}
+            activeStats={activeStats}
+            workflowSteps={workflowSteps as any}
+            activeStepId={activeStepId}
+            onStepSelect={setActiveStepId}
+            contextStageMessage={contextStageMessage}
+            stepErrors={stepErrors}
+            globalErrorMessage={globalErrorMessage}
+            stepsHeight={stepsHeight}
+            streamContent={streamContent}
+            streamHtml={streamHtml}
+            stepsRef={stepsRef}
+            streamRef={streamRef}
+            autoScrollRef={autoScrollRef}
+            streamPanelRef={streamPanelRef}
+            renderStructuredTable={renderStructuredTable}
+          />
         ) : null}
         {reports.length === 0 ? (
           <div className="empty">暂无报告版本</div>

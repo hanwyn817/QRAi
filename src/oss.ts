@@ -31,7 +31,7 @@ export class OssBucket implements Bucket {
           return buffer.toString("utf8");
         },
         async arrayBuffer() {
-          return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+          return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
         },
         writeHttpMetadata(target) {
           const contentType = headers["content-type"] ?? headers["Content-Type"];
@@ -64,8 +64,8 @@ export class OssBucket implements Bucket {
         : Buffer.isBuffer(value)
           ? value
           : Buffer.from(
-              value instanceof ArrayBuffer ? value : value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
-            );
+            value instanceof ArrayBuffer ? value : value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
+          );
     await this.client.put(key, payload, { headers });
   }
 

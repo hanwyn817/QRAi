@@ -11,7 +11,7 @@ const ensureDir = (path: string) => {
 
 const buildObject = (filePath: string, contentType?: string): BucketObject => {
   return {
-    body: createReadStream(filePath),
+    body: createReadStream(filePath) as any,
     async text() {
       return await readFile(filePath, "utf8");
     },
@@ -62,8 +62,8 @@ export class LocalBucket implements Bucket {
         : Buffer.isBuffer(value)
           ? value
           : Buffer.from(
-              value instanceof ArrayBuffer ? value : value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
-            );
+            value instanceof ArrayBuffer ? value : value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
+          );
     await writeFile(filePath, payload);
     if (options?.httpMetadata?.contentType) {
       this.metadata.set(key, { contentType: options.httpMetadata.contentType });

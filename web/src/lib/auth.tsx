@@ -36,7 +36,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (result.error) {
       return result.error;
     }
-    setUser(result.data ?? null);
+    setUser((result.data as User) ?? null);
     return null;
   };
 
@@ -45,7 +45,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (result.error) {
       return result.error;
     }
-    setUser(result.data ?? null);
+    setUser((result.data as User) ?? null);
     return null;
   };
 

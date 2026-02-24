@@ -157,7 +157,7 @@ export default function AdminModels() {
     setEditingId(model.id);
     setEditForm({
       name: model.name,
-      category: model.category,
+      category: model.category as any,
       modelName: model.model_name,
       baseUrl: model.base_url,
       apiKey: "",

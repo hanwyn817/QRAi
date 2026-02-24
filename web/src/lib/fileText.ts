@@ -1,5 +1,6 @@
 let mammothPromise: Promise<typeof import("mammoth")> | null = null;
 let pdfjsPromise:
+  // @ts-ignore
   | Promise<{ getDocument: typeof import("pdfjs-dist/legacy/build/pdf").getDocument }>
   | null = null;
 
@@ -8,12 +9,13 @@ async function loadMammoth() {
     mammothPromise = import("mammoth");
   }
   const module = await mammothPromise;
-  return module.default ?? module;
+  return (module as any).default ?? module;
 }
 
 async function loadPdfjs() {
   if (!pdfjsPromise) {
     pdfjsPromise = (async () => {
+      // @ts-ignore
       const pdfjs = await import("pdfjs-dist/legacy/build/pdf");
       const worker = await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url");
       pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
@@ -64,7 +66,7 @@ export async function extractTextFromFile(file: File): Promise<ExtractTextResult
         const page = await pdf.getPage(pageIndex);
         const content = await page.getTextContent();
         const pageText = content.items
-          .map((item) => {
+          .map((item: any) => {
             if ("str" in item) {
               return item.str;
             }

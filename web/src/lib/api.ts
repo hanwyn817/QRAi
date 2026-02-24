@@ -3,7 +3,21 @@ export type ApiResponse<T> = { data: T | null; error: string | null };
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
 async function request<T>(path: string, options?: RequestInit): Promise<ApiResponse<T>> {
-  const headers: HeadersInit = options?.headers ?? {};
+  const headers: Record<string, string> = {};
+  if (options?.headers) {
+    if (options.headers instanceof Headers) {
+      options.headers.forEach((value, key) => {
+        headers[key] = value;
+      });
+    } else if (Array.isArray(options.headers)) {
+      options.headers.forEach(([key, value]) => {
+        headers[key] = value;
+      });
+    } else {
+      Object.assign(headers, options.headers);
+    }
+  }
+
   if (!(options?.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
@@ -25,7 +39,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<ApiRespo
   }
 
   if (!response.ok) {
-    return { data: null, error: payload?.error ?? "请求失败" };
+    return { data: null, error: (payload as any)?.error ?? "请求失败" };
   }
 
   return { data: payload as T, error: null };
@@ -36,8 +50,8 @@ export const api = {
     return request<{ id: string; email: string; role: string; plan?: "free" | "pro" | "max" }>(
       "/api/auth/register",
       {
-      method: "POST",
-      body: JSON.stringify({ email, password, adminKey })
+        method: "POST",
+        body: JSON.stringify({ email, password, adminKey })
       }
     );
   },
@@ -45,8 +59,8 @@ export const api = {
     return request<{ id: string; email: string; role: string; plan?: "free" | "pro" | "max" }>(
       "/api/auth/login",
       {
-      method: "POST",
-      body: JSON.stringify({ email, password })
+        method: "POST",
+        body: JSON.stringify({ email, password })
       }
     );
   },
@@ -57,7 +71,7 @@ export const api = {
     return request<{
       user: { id: string; email: string; role: "admin" | "user"; plan?: "free" | "pro" | "max" };
       quota?: { remaining: number | null; cycleEnd: string; isUnlimited: boolean };
-    }>("/api/me");
+    }>("/api/auth/me");
   },
   async listTemplates() {
     return request<{
